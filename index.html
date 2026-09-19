@@ -261,14 +261,16 @@ ul.erreurs{margin:.45rem 0 0;padding-left:1.15rem;color:var(--alerte)}
   text-transform:uppercase;color:rgba(255,255,255,.75);font-weight:800;white-space:nowrap}
 .stade .nom-zone.g{left:-.6rem}.stade .nom-zone.d{right:-.6rem}
 .stade .marque-m{position:absolute;bottom:4px;font-size:.55rem;color:rgba(255,255,255,.55);font-weight:700;transform:translateX(-50%)}
+.stade .lgn-h{position:absolute;left:8%;right:8%;height:1px;background:rgba(255,255,255,.26);pointer-events:none}
+.stade .lgn-h.quinze{background:repeating-linear-gradient(90deg,rgba(255,255,255,.4) 0 7px,transparent 7px 14px)}
 .stade .ballon{position:absolute;top:50%;width:26px;height:17px;margin:-8.5px 0 0 -13px;border-radius:50%/42%;
   background:linear-gradient(160deg,#f6e2b4,var(--accent));border:1.5px solid rgba(60,40,8,.7);
   box-shadow:0 3px 10px rgba(0,0,0,.5),0 0 16px color-mix(in srgb,var(--accent) 55%,transparent);
-  transition:left .45s cubic-bezier(.34,1.3,.5,1);z-index:3}
+  transition:left .45s cubic-bezier(.34,1.3,.5,1),top .45s cubic-bezier(.34,1.3,.5,1);z-index:3}
 .stade .ballon::after{content:"";position:absolute;left:50%;top:22%;bottom:22%;width:1.5px;background:rgba(60,40,8,.55);transform:translateX(-50%)}
 .stade .halo{position:absolute;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;
   background:radial-gradient(circle,color-mix(in srgb,var(--eq-actif,#fff) 40%,transparent),transparent 68%);
-  transition:left .45s cubic-bezier(.34,1.3,.5,1);z-index:2}
+  transition:left .45s cubic-bezier(.34,1.3,.5,1),top .45s cubic-bezier(.34,1.3,.5,1);z-index:2}
 .stade .phase{position:absolute;left:50%;top:6px;transform:translateX(-50%);font-size:.66rem;font-weight:800;
   text-transform:uppercase;letter-spacing:.11em;color:#fff;background:rgba(0,0,0,.5);padding:.12rem .6rem;border-radius:20px;
   backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.18);z-index:4;white-space:nowrap}
@@ -1250,7 +1252,8 @@ function creerMatch(domId, extId, fD, fE, tacD, tacE, contexte){
            pos:50,                 // position du ballon : 0 = ligne d'en-but de l'équipe à domicile, 100 = celle des visiteurs
            possesseur:"dom",       // équipe qui a le ballon
            tempsDeJeu:0,           // nombre de temps de jeu dans la séquence en cours
-           attente:null,           // phase arrêtée à jouer à la minute suivante : {type, pour}
+           attente:null,           // phase arrêtée suspendue en attendant votre décision
+           large:50,               // position latérale : 0 = touche gauche, 100 = touche droite
            sequence:"Coup d'envoi" };
 }
 /** Ajoute (ou retire) des points de performance à un joueur. */
@@ -1273,6 +1276,33 @@ function zoneTexte(m, att){
 /** Avance ou recule le ballon de `metres` dans le sens de l'attaque. */
 function avancer(m, att, metres){
   m.pos = clamp(m.pos + (att===m.dom ? metres : -metres), 0, 100);
+}
+/** Déplace le ballon latéralement. 0 et 100 sont les lignes de touche. */
+function glisserLargeur(m, metres){ m.large = clamp(m.large + metres, 3, 97); }
+/** Couloir occupé, pour le fil du match. */
+function couloirTexte(m){
+  if(m.large <= 18) return "le long de la touche gauche";
+  if(m.large <= 36) return "dans le couloir gauche";
+  if(m.large < 64) return "dans l'axe";
+  if(m.large < 82) return "dans le couloir droit";
+  return "le long de la touche droite";
+}
+/** Distance à la ligne de touche la plus proche, en pourcentage de largeur. */
+const bordProche = m => Math.min(m.large, 100 - m.large);
+/**
+ * Qui aplatit, selon l'endroit où l'essai se construit : au large c'est l'affaire
+ * des ailiers et de l'arrière, dans l'axe celle des centres ou des avants.
+ */
+function finisseurEssai(m, att){
+  const bord = bordProche(m);
+  const ailes = att.terrain.filter(o=>[11,14,15].includes(o.num));
+  const centres = att.terrain.filter(o=>[9,10,12,13].includes(o.num));
+  const avants = att.terrain.filter(o=>o.num<=8);
+  if(bord <= 18 && ailes.length && Math.random() < 0.72) return alea(ailes);
+  if(bord <= 32 && centres.length && Math.random() < 0.52) return alea(centres);
+  if(att.tac==="pres" && avants.length && Math.random() < 0.7) return alea(avants);
+  const arr = att.terrain.filter(o=>o.num>8);
+  return alea(arr.length ? arr : att.terrain);
 }
 /** Donne le ballon à une équipe et ouvre une nouvelle séquence. */
 function nouvellePossession(m, cote, libelle){
@@ -1461,7 +1491,7 @@ function marquerEssai(m, att, o, detail){
     else { perf(att, k.pid, -2); ajouterFeed(m, `Transformation manquée par ${nomJ(k.pid)}.`, "info"); }
   }
   const adv = att===m.dom ? m.ext : m.dom;
-  m.pos = 50; nouvellePossession(m, adv, "Renvoi après essai");
+  m.pos = 50; m.large = 50; nouvellePossession(m, adv, "Renvoi après essai");
 }
 
 /** Phase de jeu déduite de la séquence courante, pour l'indicateur du mini-stade. */
@@ -1593,6 +1623,9 @@ function phaseTouche(m, att, def){
  */
 function declencherPhase(m, type, pour){
   const contre = pour===m.dom ? m.ext : m.dom;
+  // Une touche se joue sur la ligne de touche où le ballon est sorti, une mêlée plutôt dans l'axe.
+  if(type==="touche") m.large = m.large >= 50 ? 94 : 6;
+  else m.large = clamp(32 + Math.random()*36, 20, 80);
   nouvellePossession(m, pour, type==="melee" ? `Mêlée pour ${pour.nom}` : `Touche pour ${pour.nom}`);
   if(type==="melee") phaseMelee(m, pour, contre); else phaseTouche(m, pour, contre);
 }
@@ -1677,9 +1710,9 @@ function jouerMinute(m){
     m.sequence = `${att.nom} joue à ${def.terrain.length} contre 15`;
   }
   else if((r -= pEssai) < 0){                                              // ESSAI
-    const grp = att.tac==="pres" ? att.terrain.filter(o=>o.num<=8) : att.terrain.filter(o=>o.num>8);
-    const finisseur = alea(grp.length?grp:att.terrain);
-    const detail = dist<=5 ? "sur un pick-and-go" : dist<=22 ? "après une belle séquence" : "au terme d'une action de 60 mètres";
+    const finisseur = finisseurEssai(m, att);
+    const detail = dist<=5 ? "sur un pick-and-go" : bordProche(m) <= 18 ? `à l'aile, ${couloirTexte(m)}`
+      : dist<=22 ? "après une belle séquence" : "au terme d'une action de 60 mètres";
     marquerEssai(m, att, finisseur, detail);
   }
   else if((r -= pFaute) < 0){                                              // FAUTE DE LA DÉFENSE
@@ -1743,6 +1776,13 @@ function jouerMinute(m){
   else {                                                                   // TEMPS DE JEU ORDINAIRE : gain ou perte de terrain
     const gain = Math.round(((att.tac==="occupation" ? 6 : att.tac==="large" ? 5 : 3) + superiorite*6 + (Math.random()*10 - 4)) * (accel ? 1.2 : fermer ? 0.8 : 1) * (defMont ? 0.85 : defRepli ? 1.15 : 1));
     avancer(m, att, gain);
+    // Largeur : « large » renverse le jeu d'un bord à l'autre, « au près » ramène dans l'axe.
+    if(att.tac==="large"){
+      if(bordProche(m) < 20) glisserLargeur(m, (50 - m.large) * 1.25);       // renversement
+      else glisserLargeur(m, (m.large >= 50 ? 1 : -1) * (8 + Math.random()*10));
+    } else if(att.tac==="pres"){ glisserLargeur(m, (50 - m.large) * 0.42); }
+    // Sans consigne de jeu large, le jeu revient naturellement vers l'axe après une touche.
+    else glisserLargeur(m, (50 - m.large) * 0.26 + (Math.random()*12 - 6));
     if(gain > 8){ const porteurs = att.terrain.filter(o=>att.boost && att.boost.has(o.pid));
       const porteur = (porteurs.length && Math.random()<0.4) ? alea(porteurs) : alea(att.terrain); perf(att, porteur.pid, 1); }
     else if(gain < 0){ const plaqueur = alea(def.terrain); perf(def, plaqueur.pid, 1); }
@@ -1765,7 +1805,7 @@ function jouerMinute(m){
     } else if(Math.random() < 0.55){
       ajouterFeed(m, commentaireAction(att, def, att.tac) + ` (${zoneTexte(m, att)})`, "action");
     }
-    m.sequence = `${att.nom} — ${m.tempsDeJeu} temps de jeu, ${zoneTexte(m, att)}`;
+    m.sequence = `${att.nom} — ${m.tempsDeJeu} temps de jeu, ${zoneTexte(m, att)}, ${couloirTexte(m)}`;
   }
 
   // Moment-clé : dernier quart d'heure, match serré
@@ -1781,7 +1821,7 @@ function jouerMinute(m){
       return;
     }
   }
-  if(min===40){ ajouterFeed(m, `Mi-temps : ${m.dom.nom} ${m.dom.score} - ${m.ext.score} ${m.ext.nom}.`, "info"); m.pos = 50; nouvellePossession(m, m.ext, "Coup d'envoi de la seconde période"); }
+  if(min===40){ ajouterFeed(m, `Mi-temps : ${m.dom.nom} ${m.dom.score} - ${m.ext.score} ${m.ext.nom}.`, "info"); m.pos = 50; m.large = 50; nouvellePossession(m, m.ext, "Coup d'envoi de la seconde période"); }
   if(min===80 && m.sansNul && m.dom.score===m.ext.score) ajouterFeed(m, `Égalité à la 80e : prolongation, le premier point marqué décide !`, "info");
   if(min>=80){
     if(m.sansNul && m.dom.score===m.ext.score && min<120) return;         // mort subite en phase finale
@@ -4009,6 +4049,7 @@ function renderMatch(){
   const periode = m.termine ? "Fin de match" : m.minute===0 ? "Avant match" : m.minute<=40 ? "1re période" : "2e période";
   const eqActive = m.possesseur==="dom" ? D.couleur : E.couleur;
   const posBallon = clamp(8 + m.pos*0.84, 8, 92);          // les 8 % de chaque côté sont les en-buts
+  const largeBallon = clamp(8 + (m.large===undefined?50:m.large)*0.84, 8, 92);   // largeur du terrain
   const mArret = Math.round(m.possesseur==="dom" ? 100-m.pos : m.pos);
   return `${dec}${tiroir}<div class="scoreboard" style="--eq-dom:${D.couleur};--eq-ext:${E.couleur}">
       <div class="bandeau">
@@ -4029,11 +4070,13 @@ function renderMatch(){
         <span class="lgn pointille" style="left:73.5%"></span>
         <span class="nom-zone g">${echapper(D.court)}</span><span class="nom-zone d">${echapper(E.court)}</span>
         <span class="marque-m" style="left:26.5%">22 m</span><span class="marque-m" style="left:73.5%">22 m</span>
+        <span class="lgn-h" style="top:14%"></span><span class="lgn-h quinze" style="top:26%"></span>
+        <span class="lgn-h quinze" style="top:74%"></span><span class="lgn-h" style="top:86%"></span>
         <span class="phase">${echapper(phaseEnCours(m))}</span>
-        <span class="halo" style="left:${posBallon}%"></span>
-        <span class="ballon" style="left:${posBallon}%"></span>
+        <span class="halo" style="left:${posBallon}%;top:${largeBallon}%"></span>
+        <span class="ballon" style="left:${posBallon}%;top:${largeBallon}%"></span>
       </div>
-      <div class="sequence"><span><strong>${echapper(m.sequence || "")}</strong></span><span>Ballon à <strong>${echapper(m.possesseur==="dom"?D.court:E.court)}</strong> · ${mArret} m de l'en-but</span></div>
+      <div class="sequence"><span><strong>${echapper(m.sequence || "")}</strong></span><span>Ballon à <strong>${echapper(m.possesseur==="dom"?D.court:E.court)}</strong> · ${mArret} m de l'en-but · ${echapper(couloirTexte(m))}</span></div>
       <div class="sous-bandeau"><span>${m.contexte.type==="phase"?"Phase finale":`Journée ${state.calendrier[state.journee].numero}`} · ${echapper(D.stade)}</span>
         <span>Possession <span class="pos-val">${pos} %</span> – <span class="pos-val">${100-pos} %</span></span></div>
       <div class="timeline"><span class="mt"></span>${timeline}</div>
