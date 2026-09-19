@@ -1345,7 +1345,7 @@ function forceMelee(cote){
   const avg = arr => arr.length ? arr.reduce((s,o)=>s+eff(o),0)/arr.length : 8;
   return avg(pl)*0.7 + avg(sl)*0.3;
 }
-function forceTouche(cote){
+function forceTouche(cote, forcer){
   const tal = cote.terrain.find(o=>o.num===2); const saut = cote.terrain.filter(o=>[4,5,8].includes(o.num));
   const lanceur = tal ? joueur(tal.pid).attr.vis : 8;
   const sauteurs = saut.length ? saut.reduce((s,o)=>s+(joueur(o.pid).attr.puis+joueur(o.pid).attr.vis)/2,0)/saut.length : 8;
@@ -1353,8 +1353,8 @@ function forceTouche(cote){
   // Capitaine de touche : sa lecture de l'alignement fait gagner des ballons, sur son lancer comme sur celui d'en face
   const cap = cote.spec && cote.spec.capitaineTouche && cote.terrain.find(o=>o.pid===cote.spec.capitaineTouche);
   if(cap){ const p = joueur(cap.pid); note += (p.attr.vis - 10) * 0.18 + clamp((p.age-23)*0.06, 0, 0.7); }
-  const sc = cote.schemas || SCHEMAS_DEFAUT;
-  if(sc.touche==="court") note += 1.4; else if(sc.touche==="fond") note -= 0.8;
+  const sc = forcer || (cote.schemas || SCHEMAS_DEFAUT).touche;
+  if(sc==="court") note += 1.4; else if(sc==="fond") note -= 0.8;
   return note;
 }
 /**
@@ -1542,6 +1542,12 @@ function resoudreDecision(choix){
       ajouterFeed(m, `${nomJ(d.pid)} serre les dents et reste sur le terrain, diminué.`, "blessure");
       if(Math.random()<0.35){ m.blessures.push({pid:d.pid, semaines:2 + Math.floor(Math.random()*4)}); ajouterFeed(m, `Son genou ne tient pas : la blessure s'aggrave.`, "blessure"); remplacer(m, cote, o, `${nomJ(d.pid)}, aggravation`); }
     }
+  } else if(d.type==="cinq"){
+    const pour = d.cote==="dom" ? m.dom : m.ext, contre = pour===m.dom ? m.ext : m.dom;
+    m.attente = null;
+    const lib = SCHEMAS[d.phase].options[choix];
+    ajouterFeed(m, `${pour.nom} choisit : ${lib ? lib.lib.toLowerCase() : choix}.`, "info");
+    if(d.phase==="melee") phaseMelee(m, pour, contre, choix); else phaseTouche(m, pour, contre, choix);
   } else if(d.type==="fin"){
     const cote = d.cote==="dom" ? m.dom : m.ext;
     if(choix==="fermer"){ cote.cons = {...(cote.cons||CONSIGNES_DEFAUT), rythme:"fermer", penalites:"pied"}; ajouterFeed(m, `${cote.nom} ferme le jeu pour tenir le score.`, "info"); }
@@ -1556,10 +1562,10 @@ function resoudreDecision(choix){
  * (en-avant, ballon en touche, pénaltouche) et plus seulement par un tirage au hasard.
  * `att` est l'équipe qui introduit ou lance, `def` celle qui conteste.
  */
-function phaseMelee(m, att, def){
+function phaseMelee(m, att, def, forcer){
   const zone = zoneTexte(m, att);
                                               // MÊLÉE
-    const scM = (att.schemas || SCHEMAS_DEFAUT).melee;
+    const scM = forcer || (att.schemas || SCHEMAS_DEFAUT).melee;
     const bonusM = scM==="enfoncement" ? 0.06 : scM==="ejection" ? -0.02 : 0.02;
     const gagne = Math.random() < clamp(0.5 + (forceMelee(att) - forceMelee(def))*0.06 + bonusM, 0.2, 0.9);
     if(gagne){ att.melees.g++; def.melees.p++; for(const o of att.terrain) if(o.num<=5) perf(att, o.pid, 1.2);
@@ -1576,12 +1582,19 @@ function phaseMelee(m, att, def){
       } else if(scM==="ejection"){
         avancer(m, att, 7 + Math.round(Math.random()*8));
         const ouv = att.terrain.find(o=>o.num===10) || att.terrain[0];
-        ajouterFeed(m, `Éjection rapide 8-9-10 : ${nomJ(ouv.pid)} lance les lignes arrière ${zone}.`, "action");
-        if(Math.random() < 0.12){ ajouterFeed(m, `Transmission trop rapide, ballon au sol.`, "action"); nouvellePossession(m, def, `${def.nom} récupère`); } else m.tempsDeJeu = 0;
+        if(distanceEnBut(m, att) <= 12 && Math.random() < 0.24){
+          marquerEssai(m, att, finisseurEssai(m, att), "sur une éjection rapide de mêlée");
+        } else {
+          ajouterFeed(m, `Éjection rapide 8-9-10 : ${nomJ(ouv.pid)} lance les lignes arrière ${zone}.`, "action");
+          if(Math.random() < 0.12){ ajouterFeed(m, `Transmission trop rapide, ballon au sol.`, "action"); nouvellePossession(m, def, `${def.nom} récupère`); } else m.tempsDeJeu = 0;
+        }
       } else {
         const n8 = att.terrain.find(o=>o.num===8) || att.terrain[0];
         avancer(m, att, 5 + Math.round(Math.random()*5)); perf(att, n8.pid, 1);
-        ajouterFeed(m, `Départ au ras du 8 : ${nomJ(n8.pid)} sort le ballon et avance ${zone}.`, "action"); m.tempsDeJeu = 0;
+        if(distanceEnBut(m, att) <= 6 && Math.random() < 0.22 + clamp((forceMelee(att)-forceMelee(def))*0.012, -0.06, 0.08)){
+          marquerEssai(m, att, n8, "sur un départ au ras de la mêlée");
+        } else ajouterFeed(m, `Départ au ras du 8 : ${nomJ(n8.pid)} sort le ballon et avance ${zone}.`, "action");
+        m.tempsDeJeu = 0;
       }
     } else { def.melees.g++; att.melees.p++; for(const o of def.terrain) if(o.num<=5) perf(def, o.pid, 1.2); for(const o of att.terrain) if(o.num<=3) perf(att, o.pid, -1.2);
       ajouterFeed(m, `Mêlée perdue par ${att.nom} ${zone} : ${def.nom} récupère.`, "action");
@@ -1589,13 +1602,13 @@ function phaseMelee(m, att, def){
     }
   
 }
-function phaseTouche(m, att, def){
+function phaseTouche(m, att, def, forcer){
   const zone = zoneTexte(m, att); const dist = distanceEnBut(m, att);
                                              // TOUCHE
-    const gagne = Math.random() < clamp(0.58 + (forceTouche(att) - forceTouche(def))*0.05, 0.3, 0.92);
+    const gagne = Math.random() < clamp(0.58 + (forceTouche(att, forcer) - forceTouche(def))*0.05, 0.3, 0.92);
     if(gagne){ att.touches.g++; const tal = att.terrain.find(o=>o.num===2); if(tal) perf(att, tal.pid, 1);
       const cap = att.spec && att.spec.capitaineTouche && att.terrain.find(o=>o.pid===att.spec.capitaineTouche); if(cap) perf(att, cap.pid, 1);
-      const scT = (att.schemas || SCHEMAS_DEFAUT).touche;
+      const scT = forcer || (att.schemas || SCHEMAS_DEFAUT).touche;
       const pilon = att.spec && att.spec.pilonneur && att.terrain.find(o=>o.pid===att.spec.pilonneur);
       const sauteurs = att.terrain.filter(o=>[4,5,8].includes(o.num));
       if(scT==="maul"){
@@ -1607,7 +1620,13 @@ function phaseTouche(m, att, def){
       } else if(scT==="fond"){
         avancer(m, att, 8 + Math.round(Math.random()*10));
         const arr = att.terrain.filter(o=>o.num>8);
-        ajouterFeed(m, `Ballon rapide en fond d'alignement, ${nomJ(alea(arr.length?arr:att.terrain).pid)} lance le jeu ${zone}.`, "action");
+        const proche = distanceEnBut(m, att) <= 12;
+        if(proche && Math.random() < 0.19 + clamp((forceTouche(att, scT) - forceTouche(def))*0.01, -0.05, 0.06)){
+          marquerEssai(m, att, finisseurEssai(m, att), "sur un lancement de jeu en fond d'alignement");
+        } else {
+          ajouterFeed(m, `Ballon rapide en fond d'alignement, ${nomJ(alea(arr.length?arr:att.terrain).pid)} lance le jeu ${zone}.`, "action");
+          if(proche && Math.random() < 0.2){ ajouterFeed(m, `La défense de ${def.nom} monte vite et étouffe le lancement.`, "action"); nouvellePossession(m, def, `${def.nom} récupère`); }
+        }
       } else {
         avancer(m, att, 2 + Math.round(Math.random()*3));
         ajouterFeed(m, `Lancer court sécurisé pour ${att.nom}, ${nomJ((sauteurs.length?alea(sauteurs):att.terrain[0]).pid)} assure la conquête.`, "action");
@@ -1621,13 +1640,43 @@ function phaseTouche(m, att, def){
  * se joue dans la même minute, sinon chaque phase mangerait une des 80 minutes et
  * il ne resterait plus de place pour le jeu courant.
  */
-function declencherPhase(m, type, pour){
+function declencherPhase(m, type, pour, forcer){
   const contre = pour===m.dom ? m.ext : m.dom;
   // Une touche se joue sur la ligne de touche où le ballon est sorti, une mêlée plutôt dans l'axe.
   if(type==="touche") m.large = m.large >= 50 ? 94 : 6;
   else m.large = clamp(32 + Math.random()*36, 20, 80);
   nouvellePossession(m, pour, type==="melee" ? `Mêlée pour ${pour.nom}` : `Touche pour ${pour.nom}`);
-  if(type==="melee") phaseMelee(m, pour, contre); else phaseTouche(m, pour, contre);
+  const d = distanceEnBut(m, pour);
+  if(!forcer && d <= 10 && peutInterrompre(m, pour)){        // moment-clé : la phase vaut un essai
+    m.attente = {type, pour: pour===m.dom?"dom":"ext"};
+    ouvrirDecision(m, decisionCinqMetres(m, type, pour, contre, d));
+    return;
+  }
+  if(type==="melee") phaseMelee(m, pour, contre, forcer); else phaseTouche(m, pour, contre, forcer);
+}
+/** Le choix de schéma à cinq mètres, présenté avec le rapport de force du moment. */
+function decisionCinqMetres(m, type, pour, contre, d){
+  const cote = pour===m.dom ? "dom" : "ext";
+  const ecartMelee = forceMelee(pour) - forceMelee(contre);
+  const ecartTouche = forceTouche(pour) - forceTouche(contre);
+  const juge = e => e >= 1.5 ? "domine" : e >= -1.5 ? "fait jeu égal" : "est dominé";
+  const pilon = pour.spec && pour.spec.pilonneur && pour.terrain.find(o=>o.pid===pour.spec.pilonneur);
+  if(type==="touche"){
+    const pMaul = Math.round((0.28 + (pilon ? 0.05 : 0) + clamp(ecartMelee*0.012, -0.06, 0.08)) * 100);
+    const pPrise = Math.round(clamp(0.58 + ecartTouche*0.05, 0.3, 0.92) * 100);
+    return {type:"cinq", phase:"touche", cote,
+      titre:`Touche à ${Math.round(d)} m de la ligne`,
+      texte:`Votre alignement ${juge(ecartTouche)} (${pPrise} % de chances de gagner le lancer) et votre mêlée ${juge(ecartMelee)}.${pilon ? ` ${nomJ(pilon.pid)} est votre porteur de choc.` : ""}`,
+      options:[["maul", `Ballon porté (maul pénétrant, ${pMaul} % d'essai si la touche est prise)`],
+               ["fond", "Ballon rapide fond d'alignement (on lance les trois-quarts)"],
+               ["court", "Lancer court (conquête sûre, on garde le ballon)"]]};
+  }
+  return {type:"cinq", phase:"melee", cote,
+    titre:`Mêlée à ${Math.round(d)} m de la ligne`,
+    texte:`Votre première ligne ${juge(ecartMelee)}. Une mêlée d'enfoncement cherche la pénalité ou l'essai de pénalité, l'éjection rapide lance les lignes arrière.`,
+    options:[["enfoncement", "Pousser (on veut la faute adverse)"],
+             ["ras8", "Départ au ras du 8 (gain assuré, peu de risque)"],
+             ["ejection", "Éjection rapide 8-9-10 (dangereux, exposé)"]]};
 }
 /** Une minute de jeu. */
 function jouerMinute(m){
