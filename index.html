@@ -971,6 +971,7 @@ const DB = { equipes: [
    ===================================================================== */
 const CLE_SAUVEGARDE = "rugbyManagerTop14_v18";
 let state = null, INDEX = {}, matchCourant = null, timerMatch = null, vitesseMatch = 750;
+let tickCalendrier = null;        // défilement du calendrier, jour après jour
 let prochainId = 1;
 
 /** Fabrique un joueur complet à partir d'une ligne compacte. */
@@ -2889,6 +2890,31 @@ function passerJour(){
   nettoyerFeuille();                                                                         // un joueur blessé dans la journée quitte la feuille
   return null;
 }
+/**
+ * « Continuer » fait défiler le calendrier jour après jour et s'arrête de lui-même
+ * dès que quelque chose vous attend : un événement à trancher, un jour de match,
+ * la fin de la saison. Un second appui met en pause.
+ */
+const RYTHME_CALENDRIER = 150;    // millisecondes par jour affiché
+function arreterCalendrier(){ if(tickCalendrier){ clearInterval(tickCalendrier); tickCalendrier = null; } }
+function calendrierBloque(){
+  return !!(state.evenement || matchJoueurAujourdhui() || matchCourant
+            || (state.phase && state.phase.etape==="terminee"));
+}
+function continuerCalendrier(){
+  if(tickCalendrier){ arreterCalendrier(); render(); return; }
+  if(matchCourant){ state.ecran = "match"; render(); return; }
+  if(state.phase && state.phase.etape==="terminee"){ nouvelleSaison(); return; }
+  if(matchJoueurAujourdhui()){ state.ecran = "dashboard"; render(); return; }
+  if(state.evenement){ render(); return; }
+  tickCalendrier = setInterval(() => {
+    const r = passerJour();
+    if(r){ state.messageMarche = r; arreterCalendrier(); }
+    else if(calendrierBloque()) arreterCalendrier();
+    sauvegarder(); render();
+  }, RYTHME_CALENDRIER);
+  render();
+}
 function avancerJour(){
   if(matchCourant){ state.ecran = "match"; render(); return; }
   if(state.phase && state.phase.etape==="terminee"){ nouvelleSaison(); return; }
@@ -3479,7 +3505,11 @@ function renderEntete(){
   const h = document.getElementById("entete");
   if(!state.clubId){ h.innerHTML = `<span class="titre">Rugby Manager — Top 14</span>`; return; }
   const c = club(); const etape = state.phase ? (state.phase.etape==="terminee" ? "Saison terminée" : "Phase finale") : `Journée ${Math.min(state.journee+1, NB_JOURNEES)} / ${NB_JOURNEES}`;
-  const libContinuer = matchCourant ? "Reprendre le match" : state.phase ? (state.phase.etape==="terminee" ? "Nouvelle saison" : "Jouer l'étape") : "Continuer ▶";
+  const libContinuer = tickCalendrier ? "⏸ Pause"
+    : matchCourant ? "Reprendre le match"
+    : (state.phase && state.phase.etape==="terminee") ? "Nouvelle saison"
+    : matchJoueurAujourdhui() ? "⚡ Jour de match"
+    : "Continuer ▶";
   const ecr = ECRANS.find(e=>e[0]===state.ecran);
   const ms = masseSalariale(c); const partCap = clamp(ms / SALARY_CAP * 100, 0, 100);
   const couleurCap = ms > SALARY_CAP ? "var(--alerte)" : ms > masseCible() ? "var(--jaune)" : "var(--ok)";
@@ -3496,10 +3526,9 @@ function renderEntete(){
       ${state.president ? `<span class="bloc-meta meta-secondaire"><span class="lbl">Confiance</span><span class="vl">${state.president.confiance}</span>
         <span class="jauge-fine"><i style="width:${state.president.confiance}%;background:${state.president.confiance<=25?'var(--alerte)':state.president.confiance<=45?'var(--jaune)':'var(--ok)'}"></i></span></span>` : ""}
     </span>
-    <span class="droite">${matchCourant || (state.phase && state.phase.etape==="terminee")
-      ? `<button class="btn btn-continuer btn-petit" data-action="continuer-jeu">${libContinuer}</button>`
-      : `${matchJoueurAujourdhui() ? `<button class="btn btn-continuer btn-petit" data-action="nav" data-ecran="dashboard">⚡ Jour de match</button>`
-          : `<button class="btn btn-continuer btn-petit" data-action="avancer-jour">Jour suivant ▶</button>`}<button class="btn btn-petit btn-semaine" data-action="avancer-semaine">⏩ Semaine</button>`}</span>`;
+    <span class="droite"><button class="btn btn-continuer btn-petit" data-action="continuer-jeu">${libContinuer}</button>
+      ${matchCourant || (state.phase && state.phase.etape==="terminee") || matchJoueurAujourdhui() ? ""
+        : `<button class="btn btn-petit btn-semaine" data-action="avancer-semaine">⏩ Semaine</button>`}</span>`;
 }
 function renderEcran(){
   switch(state.ecran){
@@ -3556,8 +3585,9 @@ function renderAgenda(){
     <p class="petit muet">${TYPES_SEMAINE[w.type].desc}${w.type==="prepa" ? ` Cycle de la semaine : ${w.cycle.nom}.` : ""}</p>
     <div class="equipe-type" style="margin-top:.5rem">${cellules}</div>
     <div class="actions">${aujMatch ? `<span class="badge badge-capitaine">Jour de match</span><span class="petit muet">Jouez ou simulez votre rencontre ci-dessous.</span>`
-      : `<button class="btn btn-primaire" data-action="avancer-jour">Jour suivant ▶</button><button class="btn" data-action="avancer-match">Aller au prochain match</button>`}
-      <button class="btn" data-action="avancer-semaine">⏩ Simuler la semaine</button></div>
+      : `<button class="btn btn-primaire" data-action="continuer-jeu">${tickCalendrier ? "⏸ Pause" : "Continuer ▶"}</button>
+         <button class="btn" data-action="avancer-match">Aller au prochain match</button>
+         <button class="btn" data-action="avancer-semaine">⏩ Simuler la semaine</button>`}</div>
     ${suivantes ? `<h3 style="margin-top:.8rem">Semaines à venir</h3>${suivantes}` : ""}</div>`;
 }
 function renderPlanning(){
@@ -3882,14 +3912,21 @@ function renderTactique(){
   const avants8 = f.titulaires.slice(0,8).filter(Boolean).map(joueur).filter(Boolean);
   const bancJoueurs = f.banc.map((id,i)=>({p:id?joueur(id):null, num:16+i})).filter(x=>x.p);
   const reussite = (pid, d) => pid && joueur(pid) ? Math.round(reussiteTir(joueur(pid), d)*100) : 0;
+  const cap = capitaine();
+  const candidatsCap = [...c.joueurs].filter(p=>p.blessure===0)
+    .sort((a,b)=>(b.perso==="leader") - (a.perso==="leader") || moyenne(b)-moyenne(a));
   const blocSpecialistes = `<div class="carte"><h2>Rôles de spécialistes</h2>
     <div class="consignes">
+      <label>Capitaine<select data-capitaine>${opt(candidatsCap, cap ? cap.id : null, "— aucun —")}</select></label>
       <label>Buteur n°1<select data-spec="buteur1">${opt(surFeuille, sp.buteur1, "— aucun —")}</select></label>
       <label>Buteur n°2 (secours)<select data-spec="buteur2">${opt(surFeuille, sp.buteur2, "— aucun —")}</select></label>
       <label>Capitaine de touche<select data-spec="capitaineTouche">${opt(avantsTouche, sp.capitaineTouche, "— aucun —")}</select></label>
       <label>Porteur de choc<select data-spec="pilonneur">${opt(avants8, sp.pilonneur, "— aucun —")}</select></label>
     </div>
     <p class="petit muet" style="margin-top:.5rem">
+      ${cap ? `Capitaine : <strong>${echapper(cap.nom)}</strong>, ${PERSONNALITES[cap.perso].nom.toLowerCase()}. ${cap.perso==="leader" ? "Un leader avec le brassard soude le groupe : attaque et défense y gagnent nettement." : "Un caractère de leader apporterait davantage au groupe."}${f.titulaires.includes(cap.id) ? "" : " <span style=\"color:var(--jaune)\">Il ne figure pas parmi les titulaires : ses repères manqueront sur le terrain.</span>"}` : `<span style="color:var(--alerte)">Aucun capitaine désigné : la défense perd ses repères.</span>`}
+    </p>
+    <p class="petit muet">
       ${sp.buteur1 ? `Botte n°1 : <strong>${echapper(joueur(sp.buteur1).nom)}</strong> — ${reussite(sp.buteur1,25)} % à 25 m, ${reussite(sp.buteur1,40)} % à 40 m.` : "Aucun buteur désigné : le meilleur pied présent tirera."}
       ${sp.buteur2 ? ` Relais : ${echapper(joueur(sp.buteur2).nom)} (${reussite(sp.buteur2,40)} % à 40 m), il prend la botte dès que le n°1 quitte le terrain.` : ""}
     </p>
@@ -4122,14 +4159,19 @@ function meilleuresMoyennes(n){
 }
 /** Équipe type de la saison : le mieux noté à chaque numéro de maillot. */
 function equipeType(){
-  const parPoste = {};
-  for(const p of tousJoueurs()){
-    if(p.stats.matchs < 4 || !p.stats.sommeNotes) continue;
-    const moy = p.stats.sommeNotes / p.stats.matchs;
-    POSTE_PAR_NUMERO.forEach((po, i) => {
-      if(!auPoste(p, po)) return;
-      if(!parPoste[i] || moy > parPoste[i].moy) parPoste[i] = {p, moy};
-    });
+  const candidats = tousJoueurs().filter(p => p.stats.matchs >= 4 && p.stats.sommeNotes)
+    .map(p => ({p, moy: p.stats.sommeNotes / p.stats.matchs}))
+    .sort((a, b) => b.moy - a.moy);
+  // Un joueur ne peut occuper qu'une place : sans cela le meilleur deuxième ligne
+  // prenait les numéros 4 et 5, et un polyvalent 3A/N8 en raflait trois d'un coup.
+  // Les postes les plus rares sont servis d'abord, sinon un polyvalent occupe une
+  // place qu'un spécialiste aurait tenue et laisse un trou ailleurs.
+  const rarete = po => candidats.filter(x => auPoste(x.p, po)).length;
+  const ordre = POSTE_PAR_NUMERO.map((po, i) => ({po, i})).sort((a, b) => rarete(a.po) - rarete(b.po));
+  const pris = new Set(), parPoste = {};
+  for(const {po, i} of ordre){
+    const c = candidats.find(x => !pris.has(x.p.id) && auPoste(x.p, po));
+    if(c){ pris.add(c.p.id); parPoste[i] = c; }
   }
   return POSTE_PAR_NUMERO.map((po, i) => ({num:i+1, poste:po, ...(parPoste[i]||{})}));
 }
@@ -4429,18 +4471,13 @@ document.addEventListener("click", ev => {
     case "accepter-club": state.messageMarche = accepterOffreClub(el.dataset.club); sauvegarder(); render(); break;
     case "refuser-clubs": state.manager.offres = []; state.messageMarche = {ok:true, texte:"Vous restez en poste."}; sauvegarder(); render(); break;
     case "choisir-club": nouvellePartie(el.dataset.club); state.vue = "jeu"; render(); break;
-    case "nav": state.ecran = el.dataset.ecran; state.messageMarche = null; state.slotSel = null; { const sb = document.getElementById("sidebar"); if(sb && sb.classList) sb.classList.remove("ouvert"); } sauvegarder(); render(); break;
+    case "nav": arreterCalendrier(); state.ecran = el.dataset.ecran; state.messageMarche = null; state.slotSel = null; { const sb = document.getElementById("sidebar"); if(sb && sb.classList) sb.classList.remove("ouvert"); } sauvegarder(); render(); break;
     case "menu": document.getElementById("sidebar").classList.toggle("ouvert"); break;
     case "theme": state.theme = state.theme==="clair" ? "sombre" : "clair"; sauvegarder(); render(); break;
-    case "continuer-jeu":
-      if(matchCourant){ state.ecran = "match"; render(); }
-      else if(state.phase && state.phase.etape==="terminee") nouvelleSaison();
-      else avancerJour();
-      break;
-    case "avancer-jour": avancerJour(); break;
-    case "avancer-semaine": avancerSemaine(); break;
-    case "avancer-match": avancerJusquauMatch(); break;
-    case "evenement-choix": state.messageMarche = resoudreEvenement(el.dataset.choix); sauvegarder(); render(); break;
+    case "continuer-jeu": continuerCalendrier(); break;
+    case "avancer-semaine": arreterCalendrier(); avancerSemaine(); break;
+    case "avancer-match": arreterCalendrier(); avancerJusquauMatch(); break;
+    case "evenement-choix": arreterCalendrier(); state.messageMarche = resoudreEvenement(el.dataset.choix); sauvegarder(); render(); break;
     case "fiche": state.ficheJoueur = +el.dataset.pid; render(); break;
     case "rapport": state.rapportVue = el.dataset.cle; render(); break;
     case "fermer-modale": if(!el.matches("button") && ev.target.closest("[data-stop]")) break; state.ficheJoueur = null; state.rapportVue = null; render(); break;
@@ -4542,6 +4579,12 @@ document.addEventListener("drop", ev => {
 });
 document.addEventListener("change", ev => {
   const el = ev.target;
+  if(el.dataset.capitaine !== undefined){
+    const p = el.value ? joueur(+el.value) : null;
+    state.capitaine = (p && p.clubId === state.clubId) ? p.id : null;
+    state.messageMarche = {ok:true, texte: p ? `${p.nom} est nommé capitaine.` : "Le club n'a plus de capitaine désigné."};
+    if(p) actualite(`${p.nom} est nommé capitaine par le manager.`, "ok");
+    sauvegarder(); render(); return; }
   if(el.dataset.prix !== undefined){
     state.prixPlace = clamp(+el.value || PRIX_DEFAUT, PRIX_MIN, PRIX_MAX);
     state.messageMarche = {ok:true, texte:`Prix moyen de la place fixé à ${state.prixPlace} €.`};
