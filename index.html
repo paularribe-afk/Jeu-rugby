@@ -952,7 +952,7 @@ const DB = { equipes: [
    2. ÉTAT & SAUVEGARDE
    ===================================================================== */
 const CLE_SAUVEGARDE = "rugbyManagerTop14_v18";
-let state = null, INDEX = {}, matchCourant = null, timerMatch = null, vitesseMatch = 400;
+let state = null, INDEX = {}, matchCourant = null, timerMatch = null, vitesseMatch = 750;
 let prochainId = 1;
 
 /** Fabrique un joueur complet à partir d'une ligne compacte. */
@@ -4012,7 +4012,7 @@ function renderMatch(){
     ? `<button class="btn btn-primaire" data-action="continuer">${m.contexte.type==="journee"?"Valider et clôturer la journée":"Valider le résultat"}</button>`
     : m.decision ? `<span class="petit muet">Le match est en pause : le capitaine attend votre décision.</span>`
     : `${enCours?`<button class="btn" data-action="pause">⏸ Pause</button>`:`<button class="btn btn-primaire" data-action="lancer">${m.minute===0?"▶ Coup d'envoi":"▶ Reprendre"}</button>`} <span class="muet petit">Vitesse</span>
-       ${[[800,"Lente"],[250,"Rapide"],[0,"Instantané"]].map(([v,l])=>`<button class="btn btn-petit ${vitesseMatch===v?'btn-primaire':''}" data-action="vitesse" data-v="${v}">${l}</button>`).join("")}`;
+       ${[[1800,"Lente"],[750,"Normale"],[300,"Rapide"],[0,"Instantané"]].map(([v,l])=>`<button class="btn btn-petit ${vitesseMatch===v?'btn-primaire':''}" data-action="vitesse" data-v="${v}">${l}</button>`).join("")}`;
   const filtre = state.filtreFil || "tout"; const typesForts = ["essai","pen","drop","jaune","rouge","blessure"];
   const feed = [...m.feed].reverse().filter(e => filtre==="tout" || typesForts.includes(e.type)).map(e=>`<div class="evt ${e.type}"><span class="min">${e.min}'</span><span>${echapper(e.texte)}</span></div>`).join("");
   const ico = {essai:"T", pen:"3", drop:"D", jaune:"!", rouge:"✕"};
@@ -4218,8 +4218,12 @@ document.addEventListener("click", ev => {
         if((c.cons||CONSIGNES_DEFAUT)[cle] !== v){ c.cons = {...(c.cons||CONSIGNES_DEFAUT), [cle]:v};
           state.consignes = {...(state.consignes||CONSIGNES_DEFAUT), [cle]:v};
           ajouterFeed(matchCourant, `${c.nom} — consigne : ${CONSIGNES[cle].options[v].lib}.`, "info"); sauvegarder(); render(); } } break; }
-    case "ouvrir-tiroir": state.tiroirRemp = true; state.sortantSel = null; render(); break;
-    case "fermer-tiroir": if(ev.target.closest(".tiroir") && !el.matches("button")) break; state.tiroirRemp = false; state.sortantSel = null; render(); break;
+    case "ouvrir-tiroir": state.tiroirRemp = true; state.sortantSel = null;
+      state.repriseApresTiroir = timerMatch !== null; pauseSimulation(); render(); break;
+    case "fermer-tiroir": if(ev.target.closest(".tiroir") && !el.matches("button")) break;
+      state.tiroirRemp = false; state.sortantSel = null;
+      if(state.repriseApresTiroir){ state.repriseApresTiroir = false; render(); demarrerSimulation(); } else render();
+      break;
     case "choisir-sortant": state.sortantSel = +el.dataset.num; render(); break;
     case "choisir-entrant": if(state.sortantSel && matchCourant){ remplacementManuel(matchCourant, state.sortantSel, +el.dataset.pid);
       state.sortantSel = null; const c = [matchCourant.dom, matchCourant.ext].find(x=>x.id===state.clubId);
