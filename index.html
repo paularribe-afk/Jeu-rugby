@@ -661,6 +661,24 @@ const MARGE_CIBLE = 0.6;           // masse salariale cible : au mieux plafond �
 const PART_MASSE = 0.305;          // ...et au plus 30,5 % du budget du club (les clubs sont déjà à leur maximum)
 const MAX_RECRUES = 5;             // arrivées extérieures autorisées par saison sans accord spécial    // fenêtre hivernale : entre la J11 et la J14 incluses (en plus de l'intersaison)
 const SALARY_CAP = 10.7;           // plafond de masse salariale LNR (M€)
+
+/* ---- Économie du club ------------------------------------------------- */
+/** Capacité des stades, en places. Valeurs réelles approximatives. */
+const CAPACITES = {ST:19500, UBB:34000, RCT:15000, SR:16000, R92:30000, SFP:20000, ASM:19000,
+                   CO:12500, SP:18000, LOU:25000, MHR:15700, AB:17000, USAP:14500, RCV:11400, PROD2:8000};
+const PRIX_DEFAUT = 30;            // prix moyen d'une place, en euros
+const PRIX_MIN = 16, PRIX_MAX = 55;
+const TV_BASE = 6.0;               // droits télévisés : part fixe (M€)
+const TV_RANG = 0.30;              // ...plus une prime décroissante avec le classement
+const COEF_PARTENAIRES = 0.0072;   // sponsors et merchandising = COEF x réputation^1.81
+const EXP_PARTENAIRES = 1.81;      // calibré pour retrouver les budgets de la base en saison 1
+const FRAIS_BASE = 5.0;            // frais de structure (M€) : administration, déplacements
+const FRAIS_PLACE = 0.32;          // ...par millier de places à entretenir
+const FRAIS_JOUEUR = 0.17;          // ...par joueur sous contrat (staff, médical, matériel)
+const FRAIS_STANDING = 0.075;      // ...par point de réputation (salaires du staff, coupe d'Europe)
+const PRIMES_PHASE = {qualifie:0.8, demi:1.3, finale:2.0, titre:3.0};
+/** Sévérité de la DNACG. Baisser ces seuils rend la gestion plus permissive. */
+const DNACG = {avertissement:0, recrutementBloque:-2, retraitPoints:-5, pointsRetires:6};
 const TAILLE_EFFECTIF_MAX = 38;
 const NB_JOURNEES = 26;
 
@@ -1029,7 +1047,9 @@ function nouvellePartie(clubId, nomManager){
   state.calendrier = genererCalendrier(ids); state.classement = classementVide(ids);
   state.date = debutSaison(1); state.evenement = null;          // la carrière démarre le premier lundi d'août
   reconstruireIndex();
-  state.enveloppe = Math.round(state.equipes[clubId].budget * PART_ENVELOPPE * 100)/100;
+  for(const e of Object.values(state.equipes)) caisse(e);                        // trésorerie de départ : 15 % du budget
+  state.prixPlace = PRIX_DEFAUT; state.compta = null; state.sanction = null; compta();
+  state.enveloppe = enveloppeMercato(1);
   definirObjectif();
   // Centre de formation : première promotion d'espoirs pour chaque club du championnat
   for(const e of Object.values(state.equipes)) if(!e.horsChampionnat) obtenirCentre(e);
@@ -1328,7 +1348,7 @@ function notesEquipe(cote, domicile){
   const t = TACTIQUES[cote.tac].poids; const manque = 15 - J.length;
   let att = (pack*t.pack + backs*t.backs)/(t.pack+t.backs) * Math.pow(0.9, manque);
   let def = avg(J, j=>eff(j,"plac")) * t.defense * Math.pow(0.88, manque);
-  if(domicile){ att += 0.5; def += 0.5; }
+  if(domicile){ const b = cote.bonusDom === undefined ? 0.5 : cote.bonusDom; att += b; def += b; }
   // Personnalités : un leader sur le terrain soude le groupe, un capitaine leader encore plus
   const leaders = J.filter(j=>j.p.perso==="leader").length;
   const capOk = cote.capitaine && J.some(j=>j.p.id===cote.capitaine);
@@ -1927,6 +1947,9 @@ function preparerMatch(domId, extId, contexte){
   const tD = domId===state.clubId ? state.feuille.tactique : tactiqueIA(fD);
   const tE = extId===state.clubId ? state.feuille.tactique : tactiqueIA(fE);
   const m = creerMatch(domId, extId, fD, fE, tD, tE, contexte);
+  const rangDom = state.classement && state.classement[domId] ? classementTrie().findIndex(l=>l.id===domId)+1 : 8;
+  m.recette = recetteMatch(state.equipes[domId], state.equipes[extId], rangDom);
+  m.dom.bonusDom = 0.05 + m.recette.remplissage * 1.0;         // un stade plein pèse, un stade vide ne pousse pas
   nouvellePossession(m, m.dom, "Coup d'envoi");
   ajouterFeed(m, `Coup d'envoi au ${state.equipes[domId].stade} : ${m.dom.nom} (${TACTIQUES[tD].nom}) reçoit ${m.ext.nom} (${TACTIQUES[tE].nom}).`, "info");
   return m;
@@ -1964,6 +1987,7 @@ function appliquerEffetsJoueurs(m){
 }
 function appliquerResultatChampionnat(m){
   const j = state.calendrier[state.journee];
+  if(m.dom.id === state.clubId) enregistrerRecette(m);
   for(const c of [m.dom, m.ext]) if(c.id===state.clubId && c.feuilleJiff!==undefined){ state.jiffHist = state.jiffHist || []; state.jiffHist.push(c.feuilleJiff); }
   const entree = j.matchs.find(x => x.dom===m.dom.id && x.ext===m.ext.id);
   appliquerEffetsJoueurs(m);
@@ -2203,7 +2227,7 @@ function accepterOffreClub(clubId){
   state.clubId = clubId; m.offres = [];
   state.feuille = compositionAuto(clubId); state.shortlist = []; state.rapportRecruteur = null; state.negociation = null;
   state.preContrats = []; state.offresRecues = []; state.dossiers = {};
-  state.enveloppe = Math.round(state.equipes[clubId].budget * PART_ENVELOPPE * 100)/100;
+  state.enveloppe = enveloppeMercato(1);
   state.licencie = false; definirObjectif(); state.capitaine = capitaineAuto();
   actualite(`Vous quittez ${ancien} et prenez les rênes de ${state.equipes[clubId].nom}.`, "ok");
   return {ok:true, texte:`Vous êtes désormais manager de ${state.equipes[clubId].nom}.`};
@@ -2212,16 +2236,17 @@ function accepterOffreClub(clubId){
 function nouvelleSaison(){
   const c = club(); const partis = [];
   bilanCarriere();
+  cloturerExercices();                                                           // comptes de l'exercice écoulé
   appliquerPreContrats();                                                        // les joueurs libres rejoignent le club
   evolutionJoueurs(true);                                                        // progression / déclin avant le vieillissement
   const moyJ = moyenneJiffSaison();
-  if(moyJ!==null && moyJ < MIN_JIFF){ const amende = Math.min(2, Math.round((MIN_JIFF - moyJ) * 25)/10); c.budget -= amende; actualite(`Commission JIFF : moyenne de ${moyJ.toFixed(2)} JIFF par feuille (objectif ${MIN_JIFF}), amende de ${amende.toFixed(1)} M€.`, "erreur"); }
+  if(moyJ!==null && moyJ < MIN_JIFF){ const amende = Math.min(2, Math.round((MIN_JIFF - moyJ) * 25)/10); mouvementCaisse(c, -amende); actualite(`Commission JIFF : moyenne de ${moyJ.toFixed(2)} JIFF par feuille (objectif ${MIN_JIFF}), amende de ${amende.toFixed(1)} M€.`, "erreur"); }
   else if(moyJ!==null) actualite(`Commission JIFF : moyenne de ${moyJ.toFixed(2)} JIFF par feuille, quota respecté.`, "ok");
   for(const p of [...c.joueurs]) if(p.joker){ c.joueurs = c.joueurs.filter(x=>x!==p); delete INDEX[p.id]; actualite(`Fin de contrat de joker médical : ${p.nom} quitte le club.`, "info"); }
   state.jiffHist = []; state.jokerUtilise = false; state.offresRecues = []; state.rapportRecruteur = null;
   state.recruesSaison = 0; state.dossiers = {};
   const bonus = classementTrie().findIndex(l=>l.id===c.id) < 6 ? 1.25 : 1;      // top 6 : le président desserre les cordons
-  state.enveloppe = Math.round(c.budget * PART_ENVELOPPE * bonus * 100)/100;
+  state.enveloppe = enveloppeMercato(bonus);
   actualite(`Le président fixe l'enveloppe mercato à ${state.enveloppe.toFixed(2)} M€ et une masse salariale cible de ${masseCible().toFixed(2)} M€.`, "info");
   state.licencie = false; definirObjectif();
   for(const e of Object.values(state.equipes)) for(const p of e.joueurs) if(p.approches) delete p.approches;
@@ -2243,7 +2268,11 @@ function nouvelleSaison(){
   state.saison++; state.journee = 0; state.phase = null;
   state.date = debutSaison(state.saison); state.evenement = null;               // retour à la reprise d'août
   const ids = idsChampionnat(); state.calendrier = genererCalendrier(ids); state.classement = classementVide(ids);
-  state.journeeVue = 1; c.budget += 4;                                          // dotation de nouvelle saison
+  if(state.sanction && state.sanction.type==="points" && state.sanction.saison===state.saison){
+    state.classement[state.clubId].pts = -state.sanction.points;
+    actualite(`Sanction DNACG appliquée : le club démarre la saison avec ${-state.sanction.points} points.`, "erreur");
+  }
+  state.journeeVue = 1;
   intersaisonCentreFormation();                                                  // centre de formation : progression, départs, nouvelle promotion
   if(partis.length) actualite(`Fins de contrat : ${partis.join(", ")} quittent le club (fins de contrat non prolongées).`, "erreur");
   actualite(`Saison ${state.saison} : le championnat reprend, budget crédité de 4 M€.`, "ok");
@@ -2334,12 +2363,12 @@ function faireOffre(pid, salaire, duree){
   const masse = masseSalariale(c) + salaire/1000;
   if(masse > SALARY_CAP) return {ok:false, texte:`Transfert refusé par la commission de régulation : masse salariale ${masse.toFixed(2)} M€ au-dessus du plafond de ${SALARY_CAP} M€.`};
   const indem = indemniteTransfert(p);
-  if(indem > c.budget) return {ok:false, texte:`Budget insuffisant pour l'indemnité de transfert (${indem.toFixed(2)} M€ demandés, ${c.budget.toFixed(2)} M€ disponibles).`};
+  if(indem > caisse(c)) return {ok:false, texte:`Trésorerie insuffisante pour l'indemnité de transfert (${indem.toFixed(2)} M€ demandés, ${caisse(c).toFixed(2)} M€ disponibles).`};
   const demande = demandeSalariale(p);
   const repRequise = clamp((moyenne(p)-9)*10, 0, 95);
   const facteur = 1 + Math.max(0, repRequise - c.reputation)/150 + (duree===1 ? 0.08 : duree===3 ? -0.04 : 0);
   if(salaire < Math.round(demande*facteur)) return {ok:false, texte:`${p.nom} refuse : il attend environ ${Math.round(demande*facteur)} k€/an${duree===1?" et préfère un contrat plus long":""}.`};
-  const anc = state.equipes[p.clubId]; anc.joueurs = anc.joueurs.filter(x=>x!==p); anc.budget += indem; c.budget -= indem;
+  const anc = state.equipes[p.clubId]; anc.joueurs = anc.joueurs.filter(x=>x!==p); mouvementCaisse(anc, indem); mouvementCaisse(c, -indem);
   p.clubId = c.id; p.salaire = salaire; p.contrat = {anneesRestantes:duree}; p.listeTransfert = false; c.joueurs.push(p);
   actualite(`Recrue : ${p.nom} (${POSTES[p.poste]}) signe ${duree} an(s) à ${salaire} k€.`, "ok");
   return {ok:true, texte:`${p.nom} signe pour ${duree} an(s) à ${salaire} k€/an (indemnité ${indem.toFixed(2)} M€ versée à ${anc.court}).`};
@@ -2393,7 +2422,7 @@ function creerDossier(p){
   const c = club();
   const rivaux = Object.values(state.equipes).filter(e => !e.horsChampionnat && e.id!==c.id && e.id!==p.clubId
       && masseSalariale(e) + p.salaire/1000 <= SALARY_CAP && e.joueurs.length < TAILLE_EFFECTIF_MAX
-      && (p.jiff || nonJiff(e) < NON_JIFF_MAX) && e.budget >= indemniteTransfert(p))
+      && (p.jiff || nonJiff(e) < NON_JIFF_MAX) && caisse(e) >= indemniteTransfert(p))
     .sort((a,b)=>b.reputation-a.reputation);
   const attractif = clamp(Math.round((moyenne(p)-11)*22 + (p.age<=25?15:0) + (p.listeTransfert?10:0)), 0, 95);
   const nb = attractif>70 ? 1+Math.floor(Math.random()*3) : attractif>45 ? Math.floor(Math.random()*3) : Math.floor(Math.random()*2);
@@ -2410,7 +2439,7 @@ function concurrenceJoue(n){
     const avantage = clamp((e.reputation - prestigeMoi)/100, -0.25, 0.25);
     if(Math.random() < 0.13 + avantage + (n.tour-1)*0.07){                       // plus on traîne, plus le risque monte
       const indem = indemniteTransfert(p); const anc = state.equipes[p.clubId];
-      anc.joueurs = anc.joueurs.filter(x=>x!==p); anc.budget += indem; e.budget -= indem;
+      anc.joueurs = anc.joueurs.filter(x=>x!==p); mouvementCaisse(anc, indem); mouvementCaisse(e, -indem);
       p.clubId = e.id; p.salaire = Math.round(demandeSalariale(p)*1.05); p.contrat = {anneesRestantes:2}; p.listeTransfert = false; e.joueurs.push(p);
       delete state.dossiers[n.pid];
       actualite(`${p.nom} signe à ${e.court} : vous avez été doublé sur ce dossier.`, "erreur");
@@ -2455,7 +2484,7 @@ function ouvrirNegociation(pid){
 }
 function executerTransfert(p, salaire, duree, indem){
   const c = club(); const anc = state.equipes[p.clubId];
-  anc.joueurs = anc.joueurs.filter(x=>x!==p); anc.budget += indem; c.budget -= indem;
+  anc.joueurs = anc.joueurs.filter(x=>x!==p); mouvementCaisse(anc, indem); mouvementCaisse(c, -indem);
   state.enveloppe = Math.round((state.enveloppe - indem)*100)/100; state.recruesSaison++;
   delete state.dossiers[p.id];
   p.clubId = c.id; p.salaire = salaire; p.contrat = {anneesRestantes:duree}; p.listeTransfert = false; c.joueurs.push(p);
@@ -2472,6 +2501,8 @@ const margeSalariale = () => Math.round((masseCible() - masseSalariale(club()))*
 /** Contrôles institutionnels avant toute signature. Renvoie un message d'erreur ou null. */
 function controlesRecrutement(p, salaire, indemnite){
   const c = club();
+  if(recrutementBloque()) return `La DNACG a interdit tout recrutement cette saison. Redressez la trésorerie avant la prochaine clôture.`;
+  if(indemnite > caisse(c)) return `Trésorerie insuffisante : ${caisse(c).toFixed(2)} M€ en caisse pour ${indemnite.toFixed(2)} M€ demandés.`;
   const masse = masseSalariale(c) + salaire/1000;
   if(masse > SALARY_CAP) return `Commission de régulation : masse salariale ${masse.toFixed(2)} M€, au-dessus du plafond de ${SALARY_CAP} M€.`;
   if(masse > masseCible()) return `Le président refuse : la masse salariale passerait à ${masse.toFixed(2)} M€ pour une cible de ${masseCible().toFixed(2)} M€. Libérez ${(masse-masseCible()).toFixed(2)} M€ en vendant ou en résiliant un contrat.`;
@@ -2519,7 +2550,7 @@ function prolonger(pid, salaire, duree){
 }
 function resilier(pid){
   const p = joueur(pid); const c = club(); const cout = Math.round(p.salaire*0.3)/1000;
-  c.joueurs = c.joueurs.filter(x=>x!==p); c.budget -= cout; delete INDEX[p.id];
+  c.joueurs = c.joueurs.filter(x=>x!==p); mouvementCaisse(c, -cout); delete INDEX[p.id];
   nettoyerFeuille(); actualite(`${p.nom} quitte le club (contrat résilié, indemnité ${cout.toFixed(2)} M€, ${p.salaire} k€ de masse libérée).`, "info");
   return {ok:true, texte:`Contrat de ${p.nom} résilié : ${cout.toFixed(2)} M€ d'indemnité, ${p.salaire} k€ de masse salariale libérée.`};
 }
@@ -2568,7 +2599,7 @@ function genererOffresRecues(){
   const e = alea(acheteurs);
   const base = indemniteTransfert(p);
   const montant = Math.round(base * (p.listeTransfert ? (0.9 + Math.random()*0.5) : (1 + Math.random()*0.6)) * 100)/100;
-  if(montant > e.budget) return;
+  if(montant > caisse(e)) return;
   state.offresRecues.push({pid:p.id, clubId:e.id, montant, salaire:Math.round(demandeSalariale(p)*1.1), expire: state.journee + 3});
   actualite(`${e.court} propose ${montant.toFixed(2)} M€ pour ${p.nom}. À vous de trancher.`, "info");
 }
@@ -2582,7 +2613,7 @@ function traiterOffreRecue(pid, accepter){
     actualite(`Offre de ${e.court} refusée pour ${p.nom}${p.listeTransfert?" (il espérait partir)":""}.`, "info");
     return {ok:true, texte:`Vous refusez l'offre de ${e.court} pour ${p.nom}.`};
   }
-  c.joueurs = c.joueurs.filter(x=>x!==p); c.budget += o.montant; e.budget -= o.montant; state.enveloppe = Math.round((state.enveloppe + o.montant*0.7)*100)/100;
+  c.joueurs = c.joueurs.filter(x=>x!==p); mouvementCaisse(c, o.montant); mouvementCaisse(e, -o.montant); state.enveloppe = Math.round((state.enveloppe + o.montant*0.7)*100)/100;
   p.clubId = e.id; p.salaire = o.salaire; p.contrat = {anneesRestantes: 1 + Math.floor(Math.random()*3)}; p.listeTransfert = false; e.joueurs.push(p);
   nettoyerFeuille(); actualite(`${p.nom} est vendu à ${e.court} pour ${o.montant.toFixed(2)} M€ (${p.salaire} k€ de masse salariale libérée).`, "ok");
   return {ok:true, texte:`${p.nom} rejoint ${e.court} : +${o.montant.toFixed(2)} M€ et ${p.salaire} k€ de masse libérée.`};
@@ -2594,9 +2625,9 @@ function marcheIA(){
   for(const p of club().joueurs.filter(p=>p.listeTransfert)){
     if(Math.random()>=0.15) continue;
     const indem = indemniteTransfert(p);
-    const ach = ia.filter(e => e.budget>=indem && masseSalariale(e)+p.salaire/1000<=SALARY_CAP && e.joueurs.length<TAILLE_EFFECTIF_MAX && (p.jiff || nonJiff(e)<NON_JIFF_MAX));
+    const ach = ia.filter(e => caisse(e)>=indem && masseSalariale(e)+p.salaire/1000<=SALARY_CAP && e.joueurs.length<TAILLE_EFFECTIF_MAX && (p.jiff || nonJiff(e)<NON_JIFF_MAX));
     if(!ach.length) continue;
-    const e = alea(ach); club().joueurs = club().joueurs.filter(x=>x!==p); club().budget += indem; e.budget -= indem;
+    const e = alea(ach); club().joueurs = club().joueurs.filter(x=>x!==p); mouvementCaisse(club(), indem); mouvementCaisse(e, -indem);
     p.clubId = e.id; p.listeTransfert = false; e.joueurs.push(p); nettoyerFeuille();
     actualite(`${p.nom} rejoint ${e.court} pour ${indem.toFixed(2)} M€.`, "ok");
   }
@@ -2685,8 +2716,7 @@ function intersaisonCentreFormation(){
     cf.espoirs = cf.espoirs.filter(es=>es.age <= CENTRE_AGE_MAX);
     if(moi){
       if(partants.length) actualite(`Centre de formation : ${partants.map(x=>x.nom).join(", ")} quitte(nt) le centre sans contrat professionnel.`, "info");
-      e.budget = Math.round((e.budget - cf.budgetInvestissement)*100)/100;
-      actualite(`Centre de formation : investissement annuel de ${cf.budgetInvestissement.toFixed(2)} M€ prélevé sur le budget.`, "info");
+      actualite(`Centre de formation : ${cf.budgetInvestissement.toFixed(2)} M€ investis cette saison, portés aux charges de l'exercice.`, "info");
     }
     genererPromotion(e, moi);
   }
@@ -2696,8 +2726,8 @@ function ameliorerCentre(){
   const c = club(); const cf = obtenirCentre(c);
   if(cf.niveau >= CENTRE_NIVEAU_MAX) return {ok:false, texte:"Le centre de formation est déjà au niveau maximal."};
   const cout = coutAmeliorationCentre(cf.niveau);
-  if(c.budget < cout) return {ok:false, texte:`Budget insuffisant : ${cout.toFixed(2)} M€ nécessaires, ${c.budget.toFixed(2)} M€ disponibles.`};
-  c.budget = Math.round((c.budget - cout)*100)/100; cf.niveau++;
+  if(caisse(c) < cout) return {ok:false, texte:`Trésorerie insuffisante : ${cout.toFixed(2)} M€ nécessaires, ${caisse(c).toFixed(2)} M€ disponibles.`};
+  mouvementCaisse(c, -cout); cf.niveau++;
   actualite(`Centre de formation porté au niveau ${cf.niveau} (${cout.toFixed(2)} M€ investis).`, "ok");
   return {ok:true, texte:`Centre de formation amélioré : niveau ${cf.niveau}/${CENTRE_NIVEAU_MAX}.`};
 }
@@ -2893,7 +2923,7 @@ const ajusterMoral = (p, d) => { p.moral = clamp(moralDe(p) + d, 0, 100); };
 const ajusterConfiance = d => { if(state.president) state.president.confiance = clamp(state.president.confiance + d, 0, 100); };
 const disponiblesClub = () => club().joueurs.filter(p=>p.blessure===0);
 const tirerAuSort = (arr, n) => [...arr].sort(()=>Math.random()-0.5).slice(0, n);
-const crediter = (c, m) => { c.budget = Math.round((c.budget + m)*100)/100; };
+const crediter = (c, m) => mouvementCaisse(c, m);
 /**
  * Catalogue des événements. Sans « options », l'effet est immédiat et raconté dans les actualités.
  * Avec « options », le jeu se met en pause jusqu'à votre choix (resoudre applique la conséquence).
@@ -3037,6 +3067,148 @@ function resoudreEvenement(choix){
 }
 
 /* =====================================================================
+   6 quater. ÉCONOMIE DU CLUB
+   Le budget est le chiffre d'affaires de l'exercice, recalculé chaque saison.
+   La trésorerie est le cash accumulé : c'est elle, et elle seule, qui paie les
+   indemnités de transfert et les travaux. Auparavant les deux étaient confondus,
+   si bien qu'un transfert amputait définitivement le chiffre d'affaires du club.
+   ===================================================================== */
+const capaciteStade = e => CAPACITES[e.id] || 15000;
+/** Trésorerie du club, initialisée à la volée pour les sauvegardes antérieures. */
+function caisse(e){
+  if(e.tresorerie === undefined) e.tresorerie = Math.round(e.budget * 0.15 * 100)/100;
+  return e.tresorerie;
+}
+const mouvementCaisse = (e, m) => { e.tresorerie = Math.round((caisse(e) + m)*100)/100; };
+const prixPlace = () => clamp(state.prixPlace === undefined ? PRIX_DEFAUT : state.prixPlace, PRIX_MIN, PRIX_MAX);
+/** Comptabilité de l'exercice en cours, remise à zéro à chaque saison. */
+function compta(){
+  if(!state.compta) state.compta = {billetterie:0, primes:0, matchs:[], exercices:[]};
+  if(!Array.isArray(state.compta.exercices)) state.compta.exercices = [];
+  if(!Array.isArray(state.compta.matchs)) state.compta.matchs = [];
+  return state.compta;
+}
+/**
+ * Taux de remplissage d'un match à domicile. Le prix des places est le levier du
+ * manager : il rapporte à court terme et vide le stade, ce qui coûte l'avantage du terrain.
+ */
+function remplissageAttendu(e, adv, rang, prix){
+  let f = 0.58 + (e.reputation - 70)/100 * 0.6;                 // notoriété du club
+  f += (8 - clamp(rang || 8, 1, 14)) * 0.013;                   // le classement attire
+  if(state.calendrier){ const fo = formeClub(e.id);
+    if(fo.matchs) f += (fo.serie.filter(x=>x==="V").length - 2) * 0.022; }
+  if(adv){
+    if(rivalite(e.id, adv.id)) f += 0.15;                       // un derby remplit
+    f += clamp((adv.reputation - 78)/100, -0.03, 0.08);         // l'affiche compte
+  }
+  f *= 1 - (prix - PRIX_DEFAUT) * 0.011;                        // élasticité au prix
+  return clamp(f, 0.25, 1);
+}
+function recetteMatch(e, adv, rang){
+  const prix = (state.clubId && e.id === state.clubId) ? prixPlace() : PRIX_DEFAUT;
+  const f = remplissageAttendu(e, adv, rang, prix);
+  const spectateurs = Math.round(capaciteStade(e) * f);
+  return {remplissage:f, spectateurs, prix, recette: Math.round(spectateurs * prix)/1e6};
+}
+/** Recettes annuelles hors billetterie, fonction du standing et du classement. */
+function revenusStructurels(e, rang){
+  const r = clamp(rang || 8, 1, 14);
+  return {tv: Math.round((TV_BASE + (15 - r) * TV_RANG)*100)/100,
+          partenaires: Math.round(COEF_PARTENAIRES * Math.pow(e.reputation, EXP_PARTENAIRES) * (1 + (7 - r)*0.015) * 100)/100};
+}
+/** Charges annuelles : les salaires sont enfin payés. */
+function chargesAnnuelles(e){
+  const cf = obtenirCentre(e);
+  const structure = FRAIS_BASE + capaciteStade(e)/1000 * FRAIS_PLACE
+    + e.joueurs.length * FRAIS_JOUEUR + e.reputation * FRAIS_STANDING;
+  return {salaires: Math.round(masseSalariale(e)*100)/100,
+          formation: cf.budgetInvestissement,
+          structure: Math.round(structure*100)/100};
+}
+/** Prime de parcours en phase finale. */
+function primePhaseFinale(clubId){
+  const ph = state.phase; if(!ph) return 0;
+  if(ph.champion === clubId) return PRIMES_PHASE.titre;
+  if(ph.finale && (ph.finale.dom===clubId || ph.finale.ext===clubId)) return PRIMES_PHASE.finale;
+  if(ph.demis && ph.demis.some(x=>x.dom===clubId || x.ext===clubId)) return PRIMES_PHASE.demi;
+  if(ph.qualifiesDirects && ph.qualifiesDirects.includes(clubId)) return PRIMES_PHASE.demi;
+  if(ph.barrages && ph.barrages.some(x=>x.dom===clubId || x.ext===clubId)) return PRIMES_PHASE.qualifie;
+  return 0;
+}
+/** Compte de résultat prévisionnel, affiché en cours de saison. */
+function exerciceEnCours(){
+  const c = club(); const cl = classementTrie(); const rang = cl.findIndex(l=>l.id===c.id)+1;
+  const rs = revenusStructurels(c, rang), ch = chargesAnnuelles(c), k = compta();
+  const joues = k.matchs.length, restants = Math.max(0, 13 - joues);
+  // Les réceptions à venir sont projetées au tarif courant, sinon changer le prix
+  // n'aurait aucun effet visible sur la projection.
+  const projection = recetteMatch(c, null, rang).recette * restants;
+  const billetterie = Math.round((k.billetterie + projection)*100)/100;
+  const produits = Math.round((rs.tv + rs.partenaires + billetterie + k.primes)*100)/100;
+  const charges = Math.round((ch.salaires + ch.formation + ch.structure)*100)/100;
+  return {rang, ...rs, billetterie, billetterieAcquise: Math.round(k.billetterie*100)/100, joues,
+          primes:k.primes, ...ch, produits, charges, resultat: Math.round((produits - charges)*100)/100};
+}
+/** Clôture de l'exercice, appelée à l'intersaison. Renvoie le compte de résultat définitif. */
+function cloturerExercice(e, rang, billetterie, primes){
+  const rs = revenusStructurels(e, rang), ch = chargesAnnuelles(e);
+  const produits = Math.round((rs.tv + rs.partenaires + billetterie + primes)*100)/100;
+  const charges = Math.round((ch.salaires + ch.formation + ch.structure)*100)/100;
+  const resultat = Math.round((produits - charges)*100)/100;
+  mouvementCaisse(e, resultat);
+  e.budget = produits;                                          // le budget devient le chiffre d'affaires réalisé
+  return {saison:state.saison, rang, ...rs, billetterie, primes, ...ch, produits, charges, resultat, tresorerie: caisse(e)};
+}
+/** Exercice d'un club dirigé par l'ordinateur : billetterie estimée sur treize réceptions. */
+function cloturerExerciceIA(e, rang){
+  return cloturerExercice(e, rang, Math.round(recetteMatch(e, null, rang).recette * 13 * 100)/100, primePhaseFinale(e.id));
+}
+/**
+ * La DNACG examine les comptes. Une trésorerie négative est sanctionnée par paliers,
+ * du simple avertissement au retrait de points.
+ */
+function controleDNACG(){
+  const c = club(); const t = caisse(c); const s = {niveau:"ok", texte:""};
+  if(t < DNACG.retraitPoints){
+    s.niveau = "points"; state.sanction = {type:"points", points:DNACG.pointsRetires, saison:state.saison+1};
+    s.texte = `DNACG : trésorerie à ${t.toFixed(2)} M€. Le club est sanctionné de ${DNACG.pointsRetires} points au classement de la saison prochaine, et son recrutement est bloqué.`;
+  } else if(t < DNACG.recrutementBloque){
+    s.niveau = "recrutement"; state.sanction = {type:"recrutement", saison:state.saison+1};
+    s.texte = `DNACG : trésorerie à ${t.toFixed(2)} M€. Recrutement interdit la saison prochaine.`;
+  } else if(t < DNACG.avertissement){
+    s.niveau = "avertissement"; state.sanction = null;
+    s.texte = `DNACG : trésorerie négative (${t.toFixed(2)} M€). Le club est placé sous surveillance ; redressez les comptes avant la prochaine clôture.`;
+  } else state.sanction = null;
+  return s;
+}
+/** Ce que le président autorise à dépenser en indemnités, borné par le cash réel. */
+function enveloppeMercato(bonus){
+  const c = club();
+  return Math.max(0, Math.round(Math.min(caisse(c) * 0.5, c.budget * PART_ENVELOPPE * (bonus||1)) * 100)/100);
+}
+/** Recette d'un match à domicile, portée à la comptabilité de l'exercice. */
+function enregistrerRecette(m){
+  const k = compta(), c = club();
+  const r = m.recette || recetteMatch(c, state.equipes[m.ext.id], classementTrie().findIndex(l=>l.id===c.id)+1);
+  k.billetterie = Math.round((k.billetterie + r.recette)*100)/100;
+  k.matchs.push({journee: state.journee+1, adv: m.ext.id, spectateurs: r.spectateurs, prix: r.prix, recette: r.recette});
+}
+/** Clôture des comptes de tous les clubs, puis contrôle de la DNACG pour le vôtre. */
+function cloturerExercices(){
+  const cl = classementTrie(), c = club(), k = compta();
+  const ex = cloturerExercice(c, cl.findIndex(l=>l.id===c.id)+1, Math.round(k.billetterie*100)/100, primePhaseFinale(c.id));
+  k.exercices.push(ex); if(k.exercices.length > 8) k.exercices.shift();
+  for(const e of Object.values(state.equipes)) if(!e.horsChampionnat && e.id !== c.id)
+    cloturerExerciceIA(e, cl.findIndex(l=>l.id===e.id)+1);
+  actualite(`Clôture de l'exercice : ${ex.produits.toFixed(2)} M€ de produits pour ${ex.charges.toFixed(2)} M€ de charges, résultat ${ex.resultat>=0?"+":""}${ex.resultat.toFixed(2)} M€. Trésorerie : ${ex.tresorerie.toFixed(2)} M€.`, ex.resultat>=0?"ok":"erreur");
+  const sanction = controleDNACG();
+  if(sanction.texte) actualite(sanction.texte, "erreur");
+  k.billetterie = 0; k.primes = 0; k.matchs = [];
+}
+const recrutementBloque = () => !!(state.sanction && state.sanction.saison === state.saison
+  && (state.sanction.type === "recrutement" || state.sanction.type === "points"));
+
+/* =====================================================================
    7. ÉCRANS
    ===================================================================== */
 /** Écusson SVG original, construit à partir de la couleur du club et de ses initiales. */
@@ -3078,11 +3250,12 @@ const ICONES = {
   tactique:`<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M3 12h18"/><circle cx="12" cy="12" r="2.6"/></svg>`,
   marche:`<svg viewBox="0 0 24 24"><path d="M3 8h13l-2.5-3"/><path d="M21 16H8l2.5 3"/><path d="M16 8l2.5 3"/><path d="M8 16l-2.5-3"/></svg>`,
   stats:`<svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>`,
+  finances:`<svg viewBox="0 0 24 24"><path d="M3 20h18"/><path d="M6 20V9M11 20V5M16 20v-8M21 20v-4"/><circle cx="6" cy="6.5" r="1.6"/></svg>`,
   carriere:`<svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="5"/><path d="M8.5 13.2 7 21l5-2.6L17 21l-1.5-7.8"/></svg>`,
   editeur:`<svg viewBox="0 0 24 24"><path d="M4 20h4l10-10-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>`,
   match:`<svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9" ry="6" transform="rotate(-38 12 12)"/><path d="M8.6 15.4 15.4 8.6M10.4 10.2l1.6 1.6M12 12.2l1.6 1.6"/></svg>`
 };
-const ECRANS = [["dashboard","Tableau de bord"],["calendrier","Calendrier"],["effectif","Effectif"],["formation","Formation"],["tactique","Tactique"],["marche","Marché"],["stats","Statistiques"],["carriere","Carrière"],["editeur","Éditeur"],["match","Match"]];
+const ECRANS = [["dashboard","Tableau de bord"],["calendrier","Calendrier"],["effectif","Effectif"],["formation","Formation"],["tactique","Tactique"],["marche","Marché"],["finances","Finances"],["stats","Statistiques"],["carriere","Carrière"],["editeur","Éditeur"],["match","Match"]];
 function render(){
   const root = document.documentElement;
   root.setAttribute("data-theme", state.theme || "sombre");
@@ -3335,6 +3508,7 @@ function renderEcran(){
     case "formation": return renderFormation();
     case "tactique": return renderTactique();
     case "marche": return renderMarche();
+    case "finances": return renderFinances();
     case "carriere": return renderCarriere();
     case "stats": return renderStats();
     case "editeur": return renderEditeur();
@@ -3658,7 +3832,7 @@ function renderEffectif(){
 function renderFormation(){
   const c = club(); const cf = obtenirCentre(c);
   const auMax = cf.niveau >= CENTRE_NIVEAU_MAX; const cout = auMax ? 0 : coutAmeliorationCentre(cf.niveau);
-  const peutAmeliorer = !auMax && c.budget >= cout;
+  const peutAmeliorer = !auMax && caisse(c) >= cout;
   const cap = capaciteCentre(cf); const ms = masseSalariale(c);
   const precision = cf.niveau >= 5 ? "exacte" : cf.niveau >= 3 ? "à ±1 point" : "à ±2 points";
   const espoirs = [...cf.espoirs].sort((a,b)=>moyenne(b)-moyenne(a));
@@ -3683,7 +3857,7 @@ function renderFormation(){
       <p class="petit">Niveau <strong>${cf.niveau}</strong> : promotions de meilleur niveau, progression annuelle plus rapide, capacité de ${cap} espoirs et estimation du potentiel ${precision}.</p>
       <div class="actions">${auMax ? `<span class="badge badge-ok">Niveau maximal atteint</span>`
         : `<button class="btn btn-primaire" data-action="centre-ameliorer" ${peutAmeliorer?"":"disabled"}>Passer au niveau ${cf.niveau+1} (${cout.toFixed(2)} M€)</button>`}</div>
-      ${!auMax && !peutAmeliorer ? `<p class="petit" style="color:var(--alerte);margin-top:.5rem">Budget insuffisant : ${c.budget.toFixed(2)} M€ disponibles pour ${cout.toFixed(2)} M€ nécessaires.</p>` : ""}
+      ${!auMax && !peutAmeliorer ? `<p class="petit" style="color:var(--alerte);margin-top:.5rem">Trésorerie insuffisante : ${caisse(c).toFixed(2)} M€ disponibles pour ${cout.toFixed(2)} M€ nécessaires.</p>` : ""}
     </div>
     <div class="carte"><h2>Investissement annuel</h2>
       <div class="semaine"><label>Budget de formation<select data-centre="budget">${CENTRE_INVESTISSEMENTS.map(v=>`<option value="${v}" ${cf.budgetInvestissement===v?"selected":""}>${v.toFixed(2)} M€ / an</option>`).join("")}</select></label></div>
@@ -3865,6 +4039,73 @@ function renderMarche(){
     <p class="petit muet">Salaire maximal finançable aujourd'hui : <strong>${Math.max(0, Math.floor(margeSalariale()*1000))} k€/an</strong>. Pour recruter au-dessus, vendez un joueur, résiliez un contrat ou attendez une fin de contrat.</p>
     ${(state.preContrats||[]).length ? `<p class="petit"><strong>Arrivées libres à l'intersaison :</strong> ${state.preContrats.map(pc=>{ const p = joueur(pc.pid); return p ? `${echapper(p.nom)} (${nomClub(pc.de)}, ${pc.salaire} k€, ${pc.duree} an(s))` : ""; }).filter(Boolean).join(" · ")}</p>` : ""}</div>
     <div class="onglets">${onglets}</div>${msg}${nego}<div class="carte">${contenu}</div>`;
+}
+
+/* ---- Finances ---------------------------------------------------------- */
+function renderFinances(){
+  const c = club(), k = compta(), ex = exerciceEnCours(), t = caisse(c);
+  const cap = capaciteStade(c), prix = prixPlace();
+  const simul = recetteMatch(c, null, ex.rang);
+  const ligne = (lib, val, fort) => `<tr><td>${lib}</td><td class="num${fort?" moy":""}">${val>=0?"":"−"}${Math.abs(val).toFixed(2)} M€</td></tr>`;
+  const sanction = state.sanction && state.sanction.saison >= state.saison ? state.sanction : null;
+  const etatDnacg = t < DNACG.retraitPoints ? ["var(--alerte)","Retrait de points encouru"]
+    : t < DNACG.recrutementBloque ? ["var(--alerte)","Recrutement menacé"]
+    : t < DNACG.avertissement ? ["var(--jaune)","Sous surveillance"]
+    : t < 3 ? ["var(--jaune)","Marge étroite"] : ["var(--ok)","Comptes sains"];
+  return `<h1>Finances</h1>
+  <div class="kpis">
+    <div class="kpi-carte">${anneau(clamp(t/15*100,0,100), etatDnacg[0])}<div class="lib">Trésorerie</div>
+      <div class="val" style="color:${t<0?'var(--alerte)':'inherit'}">${t.toFixed(2)}<span class="petit muet"> M€</span></div>
+      <div class="sous" style="color:${etatDnacg[0]}">${etatDnacg[1]}</div></div>
+    <div class="kpi-carte"><div class="lib">Chiffre d'affaires</div><div class="val">${c.budget.toFixed(1)}<span class="petit muet"> M€</span></div>
+      <div class="sous">exercice précédent</div></div>
+    <div class="kpi-carte"><div class="lib">Résultat projeté</div>
+      <div class="val" style="color:${ex.resultat<0?'var(--alerte)':'var(--ok)'}">${ex.resultat>=0?"+":"−"}${Math.abs(ex.resultat).toFixed(2)}</div>
+      <div class="sous">${ex.joues} réception(s) jouée(s) sur 13</div></div>
+    <div class="kpi-carte"><div class="lib">Masse salariale</div><div class="val" style="color:${ex.salaires>masseCible()?'var(--alerte)':'inherit'}">${ex.salaires.toFixed(2)}</div>
+      <div class="sous">soit ${(ex.salaires/Math.max(1,ex.produits)*100).toFixed(0)} % des produits</div></div>
+  </div>
+  ${sanction ? `<div class="message erreur"><strong>Sanction DNACG en cours.</strong> ${sanction.type==="points"
+      ? `${sanction.points} points retirés au classement de la saison ${sanction.saison} et recrutement bloqué.`
+      : `Recrutement interdit pour la saison ${sanction.saison}.`}</div>` : ""}
+  <div class="grille grille-2">
+    <div class="carte"><h2>Compte de résultat prévisionnel</h2>
+      <table class="tbl"><tbody>
+        ${ligne("Droits télévisés", ex.tv)}
+        ${ligne("Partenaires et merchandising", ex.partenaires)}
+        ${ligne(`Billetterie <span class="petit muet">(${ex.billetterieAcquise.toFixed(2)} acquis)</span>`, ex.billetterie)}
+        ${ex.primes ? ligne("Primes de phase finale", ex.primes) : ""}
+        ${ligne("<strong>Total des produits</strong>", ex.produits, true)}
+        <tr><td colspan="2" style="height:.4rem"></td></tr>
+        ${ligne("Masse salariale", -ex.salaires)}
+        ${ligne("Centre de formation", -ex.formation)}
+        ${ligne("Structure, stade et déplacements", -ex.structure)}
+        ${ligne("<strong>Total des charges</strong>", -ex.charges, true)}
+      </tbody></table>
+      <p class="petit" style="margin-top:.5rem">Résultat de l'exercice : <strong style="color:${ex.resultat<0?'var(--alerte)':'var(--ok)'}">${ex.resultat>=0?"+":"−"}${Math.abs(ex.resultat).toFixed(2)} M€</strong>, viré en trésorerie à la clôture.</p>
+      <p class="petit muet">Seule la trésorerie paie les indemnités de transfert et les travaux. Enveloppe mercato disponible : ${state.enveloppe.toFixed(2)} M€.</p>
+    </div>
+    <div class="carte"><h2>Billetterie</h2>
+      <div class="semaine"><label>Prix moyen de la place
+        <select data-prix>${[16,22,26,30,34,40,46,55].map(v=>`<option value="${v}" ${prix===v?"selected":""}>${v} €${v===PRIX_DEFAUT?" (standard)":""}</option>`).join("")}</select></label></div>
+      <div class="lignes-rapport" style="margin-top:.7rem">
+        <div><span class="lbl-slide">Capacité</span><strong>${cap.toLocaleString("fr-FR")} places</strong></div>
+        <div><span class="lbl-slide">Remplissage attendu</span><strong>${(simul.remplissage*100).toFixed(0)} %</strong></div>
+        <div><span class="lbl-slide">Recette par match</span><strong>${simul.recette.toFixed(2)} M€</strong></div>
+        <div><span class="lbl-slide">Avantage du terrain</span><strong>${(0.05 + simul.remplissage*1.0).toFixed(2)}</strong></div>
+      </div>
+      <p class="petit muet" style="margin-top:.6rem">Monter les prix rapporte et vide le stade. Un stade plein vaut environ trois points et demi de marge à chaque réception ; un stade au quart en vaut un.</p>
+      ${k.matchs.length ? `<h3 style="margin-top:.8rem">Réceptions de la saison</h3><div class="defilable"><table class="tbl"><thead><tr><th>J</th><th>Adversaire</th><th>Spectateurs</th><th>Prix</th><th>Recette</th></tr></thead><tbody>
+        ${k.matchs.slice().reverse().map(x=>`<tr><td>${x.journee}</td><td>${nomClub(x.adv)}</td><td class="num">${x.spectateurs.toLocaleString("fr-FR")}</td><td class="num">${x.prix} €</td><td class="num moy">${x.recette.toFixed(2)} M€</td></tr>`).join("")}
+      </tbody></table></div>` : `<p class="petit muet">Aucune réception jouée pour l'instant.</p>`}
+    </div>
+  </div>
+  ${k.exercices.length ? `<div class="carte"><h2>Exercices clos</h2><div class="defilable"><table class="tbl"><thead><tr><th>Saison</th><th>Rang</th><th>Produits</th><th>Charges</th><th>Résultat</th><th>Trésorerie</th></tr></thead><tbody>
+    ${k.exercices.slice().reverse().map(x=>`<tr><td>${x.saison}</td><td class="num">${x.rang}e</td><td class="num">${x.produits.toFixed(2)}</td><td class="num">${x.charges.toFixed(2)}</td>
+      <td class="num" style="color:${x.resultat<0?'var(--alerte)':'var(--ok)'}">${x.resultat>=0?"+":"−"}${Math.abs(x.resultat).toFixed(2)}</td><td class="num moy">${x.tresorerie.toFixed(2)}</td></tr>`).join("")}
+  </tbody></table></div></div>` : ""}
+  <div class="carte"><h2>La DNACG</h2>
+    <p class="petit muet">Le gendarme financier examine les comptes à chaque clôture. Trésorerie négative : mise sous surveillance. Sous ${DNACG.recrutementBloque} M€ : recrutement interdit la saison suivante. Sous ${DNACG.retraitPoints} M€ : ${DNACG.pointsRetires} points retirés au classement, en plus du blocage.</p></div>`;
 }
 
 /* ---- Statistiques du championnat --------------------------------------- */
@@ -4301,6 +4542,10 @@ document.addEventListener("drop", ev => {
 });
 document.addEventListener("change", ev => {
   const el = ev.target;
+  if(el.dataset.prix !== undefined){
+    state.prixPlace = clamp(+el.value || PRIX_DEFAUT, PRIX_MIN, PRIX_MAX);
+    state.messageMarche = {ok:true, texte:`Prix moyen de la place fixé à ${state.prixPlace} €.`};
+    sauvegarder(); render(); return; }
   if(el.dataset.centre==="budget"){ const cf = obtenirCentre(club()); const v = +el.value;
     cf.budgetInvestissement = CENTRE_INVESTISSEMENTS.includes(v) ? v : CENTRE_BUDGET_DEFAUT;
     state.messageMarche = {ok:true, texte:`Investissement du centre de formation fixé à ${cf.budgetInvestissement.toFixed(2)} M€/an.`}; sauvegarder(); render(); return; }
