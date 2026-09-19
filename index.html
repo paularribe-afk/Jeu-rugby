@@ -134,6 +134,7 @@ main{max-width:1280px;width:100%;margin:0 auto;padding:1.1rem}
 .badge-liste{background:rgba(255,210,63,.16);color:var(--jaune)}
 .badge-perso{background:rgba(255,255,255,.07);color:var(--texte-2)}
 .badge-forme-club{background:rgba(61,220,132,.14);color:var(--ok)}
+.badge-france{background:linear-gradient(90deg,rgba(0,85,164,.35),rgba(255,255,255,.12),rgba(239,65,53,.35));color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)}
 .badge-capitaine{background:var(--club);color:var(--club-texte);box-shadow:0 0 12px color-mix(in srgb,var(--club) 45%,transparent)}
 .lien-joueur{background:none;border:0;color:var(--texte);font:inherit;font-weight:650;padding:0;text-align:left;cursor:pointer;
   border-bottom:1px dotted var(--texte-3);transition:color .15s,border-color .15s}
@@ -661,10 +662,14 @@ const PART_ENVELOPPE = 0.055;      // enveloppe mercato = 5,5 % du budget club
 const MARGE_CIBLE = 0.6;           // masse salariale cible : au mieux plafond − 0,6 M€...
 const PART_MASSE = 0.35;           // ...et au plus 35 % du chiffre d'affaires du club
 const MAX_RECRUES = 5;             // arrivées extérieures autorisées par saison sans accord spécial    // fenêtre hivernale : entre la J11 et la J14 incluses (en plus de l'intersaison)
-const SALARY_CAP = 10.7;           // plafond LNR (M€), identique pour les quatorze clubs
-const PART_PERIMETRE = 0.82;       // part des rémunérations réellement comptée dans le périmètre du cap
-const CREDIT_JIFF = 0.045;         // crédit de formation ouvert par JIFF sous contrat (M€)
-const CREDIT_JIFF_MAX = 1.0;       // ...plafonné, comme le crédit réel de la LNR
+const SALARY_CAP = 10.7;           // socle du plafond LNR (M€), identique pour les quatorze clubs
+const CREDIT_FORMATION = 0.155;    // crédit ouvert par joueur formé au club (M€)
+const CREDIT_FORMATION_MAX = 1.9;  // ...plafonné
+const CREDIT_INTERNATIONAL = 0.215;// crédit ouvert par joueur sélectionné en équipe de France (M€)
+const CREDIT_INTERNATIONAL_MAX = 2.6;
+/** Format de la liste France : postes et nombre de sélectionnés, soit trente-cinq joueurs. */
+const SELECTION_FRANCE = {PG:3, TAL:3, PD:3, "2L":4, "3A":4, N8:2, DM:3, OUV:3, AIL:4, CEN:4, ARR:2};
+const JOURNEE_TOURNOI = 13;        // la liste est revue à la mi-saison, pendant la fenêtre du Tournoi
 
 /* ---- Économie du club ------------------------------------------------- */
 /** Capacité des stades, en places. Valeurs réelles approximatives. */
@@ -1135,6 +1140,8 @@ function nouvellePartie(clubId, identite){
   state.calendrier = genererCalendrier(ids); state.classement = classementVide(ids);
   state.date = debutSaison(1); state.evenement = null;          // la carrière démarre le premier lundi d'août
   reconstruireIndex();
+  state.infra = {extensions:0, travaux:false, medical:0}; state.sponsor = null;
+  selectionnerFrance();                                                          // liste France de départ : ouvre les crédits de salary cap
   for(const e of Object.values(state.equipes)) caisse(e);                        // trésorerie de départ : 15 % du budget
   state.prixPlace = PRIX_DEFAUT; state.compta = null; state.sanction = null; compta();
   state.enveloppe = enveloppeMercato(1);
@@ -1208,41 +1215,74 @@ function masseSalariale(e){ return e.joueurs.reduce((s,p)=>s+p.salaire,0)/1000; 
 /**
  * Deux plafonds, et un seul des deux mord selon le club.
  *
- * Le plafond LNR est le même pour tout le monde, mais il ne porte pas sur la masse salariale
- * brute : une part des rémunérations sort du périmètre (droits à l'image, jokers médicaux) et
- * chaque JIFF sous contrat ouvre un crédit de formation. C'est ce qui permet à Toulouse de
- * payer 13,8 M€ de salaires tout en restant sous un plafond affiché à 10,7.
+ * Le socle du plafond LNR est le même pour tout le monde. Ce qui diffère d'un club à l'autre,
+ * ce sont les crédits qui s'y ajoutent : un par joueur formé au club, un par joueur appelé en
+ * équipe de France. Un club qui forme et qui envoie des internationaux joue donc avec un
+ * plafond plus haut — c'est ce qui permet à Toulouse de payer 13,8 M€ de salaires quand le
+ * socle affiché est à 10,7.
  *
  * Le plafond du président, lui, dépend du chiffre d'affaires. Il est très au-dessus de la masse
  * des gros clubs et colle à celle des petits : Toulouse est bridé par la LNR, Vannes par sa
  * billetterie. C'est la contrainte qui différencie réellement les quatorze parcours.
  */
-function creditFormation(e, jiffEnPlus){
-  return Math.min(CREDIT_JIFF_MAX, (e.joueurs.filter(p=>p.jiff).length + (jiffEnPlus||0)) * CREDIT_JIFF);
+const formesAuClub = e => e.joueurs.filter(p => p.formeAuClub).length;
+const internationaux = e => e.joueurs.filter(p => p.international).length;
+function creditFormation(e, enPlus){
+  return Math.round(Math.min(CREDIT_FORMATION_MAX, (formesAuClub(e) + (enPlus||0)) * CREDIT_FORMATION)*1000)/1000;
 }
-/** Masse salariale telle que la compte la LNR (M€). */
-function masseCap(e){ return Math.round((masseSalariale(e)*PART_PERIMETRE - creditFormation(e))*1000)/1000; }
+function creditInternational(e, enPlus){
+  return Math.round(Math.min(CREDIT_INTERNATIONAL_MAX, (internationaux(e) + (enPlus||0)) * CREDIT_INTERNATIONAL)*1000)/1000;
+}
+/** Plafond LNR propre au club : le socle commun plus ses crédits. */
+function plafondLNR(e, formeEnPlus, intlEnPlus){
+  return Math.round((SALARY_CAP + creditFormation(e, formeEnPlus) + creditInternational(e, intlEnPlus))*1000)/1000;
+}
 /** Salaire brut encore signable avant de toucher le plafond LNR (M€). */
-function margeCap(e){ return Math.round(Math.max(0, SALARY_CAP - masseCap(e))/PART_PERIMETRE*1000)/1000; }
+function margeCap(e){ return Math.round(Math.max(0, plafondLNR(e) - masseSalariale(e))*1000)/1000; }
+/**
+ * Liste France : les meilleurs joueurs formés en France de la ligue, poste par poste. Revue à
+ * chaque intersaison et à la fenêtre du Tournoi. Elle ouvre des crédits de salary cap aux clubs
+ * qui fournissent la sélection, donc former un international rapporte deux fois.
+ */
+function selectionnerFrance(annonce){
+  const tous = Object.values(state.equipes).filter(e=>!e.horsChampionnat).flatMap(e=>e.joueurs);
+  for(const p of tous) p.international = false;
+  const pris = new Set(); const retenus = [];
+  for(const [poste, nb] of Object.entries(SELECTION_FRANCE)){
+    tous.filter(p => p.jiff && !pris.has(p.id) && auPoste(p, poste))
+        .sort((a,b) => moyenne(b) - moyenne(a))
+        .slice(0, nb)
+        .forEach(p => { p.international = true; pris.add(p.id); retenus.push(p); });
+  }
+  state.selectionFrance = retenus.map(p=>p.id);
+  if(annonce){
+    const miens = retenus.filter(p => p.clubId === state.clubId);
+    actualite(miens.length
+      ? `Liste du XV de France : ${miens.map(p=>`${p.nom} (${POSTES[p.poste]})`).join(", ")} ${miens.length>1?"sont appelés":"est appelé"}. ${miens.length} crédit(s) de salary cap, soit ${creditInternational(club()).toFixed(2)} M€ de plafond supplémentaire.`
+      : `Liste du XV de France : aucun joueur du club retenu. Vos concurrents gagnent du plafond salarial, pas vous.`,
+      miens.length ? "ok" : "erreur");
+  }
+  return retenus;
+}
 /** Masse salariale brute que le chiffre d'affaires du club permet de porter (M€). */
 function plafondBudget(e){ return Math.round(Math.max(2, e.budget*PART_MASSE)*1000)/1000; }
 /** Ce salaire (k€) tient-il sous le plafond LNR ? */
-function capOk(e, salaireK, jiff){
-  return (masseSalariale(e) + salaireK/1000)*PART_PERIMETRE - creditFormation(e, jiff?1:0) <= SALARY_CAP;
+function capOk(e, salaireK, p){
+  return masseSalariale(e) + salaireK/1000 <= plafondLNR(e, (p && p.formeAuClub) ? 1 : 0, (p && p.international) ? 1 : 0);
 }
 /** Ce salaire (k€) tient-il sous les deux plafonds ? */
-function masseOk(e, salaireK, jiff){ return capOk(e, salaireK, jiff) && masseSalariale(e) + salaireK/1000 <= plafondBudget(e); }
+function masseOk(e, salaireK, p){ return capOk(e, salaireK, p) && masseSalariale(e) + salaireK/1000 <= plafondBudget(e); }
 /** Le club est-il au bout de l'un des deux plafonds ? Il devient alors vendeur. */
 function souspression(e){ return margeCap(e) < 0.35 || masseSalariale(e) > plafondBudget(e) - 0.35; }
 /**
  * Motif de refus d'une variation de masse salariale (delta en k€), ou null si elle passe.
  * `dejaCompte` sert aux prolongations : le joueur est déjà dans l'effectif, son crédit aussi.
  */
-function motifMasse(e, deltaK, jiff, dejaCompte){
+function motifMasse(e, deltaK, p, dejaCompte){
   const masse = masseSalariale(e) + deltaK/1000;
-  const retenue = masse*PART_PERIMETRE - creditFormation(e, (jiff && !dejaCompte) ? 1 : 0);
-  if(retenue > SALARY_CAP)
-    return `Refusé par la LNR : la masse retenue au titre du salary cap passerait à ${retenue.toFixed(2)} M€ pour un plafond de ${SALARY_CAP} M€. Il vous reste ${margeCap(e).toFixed(2)} M€ de salaire brut signable.`;
+  const nouveau = dejaCompte ? plafondLNR(e) : plafondLNR(e, (p && p.formeAuClub) ? 1 : 0, (p && p.international) ? 1 : 0);
+  if(masse > nouveau)
+    return `Refusé par la LNR : la masse salariale passerait à ${masse.toFixed(2)} M€ pour un plafond de ${nouveau.toFixed(2)} M€ (socle ${SALARY_CAP} + ${creditFormation(e).toFixed(2)} de formation + ${creditInternational(e).toFixed(2)} d'internationaux). Il vous reste ${margeCap(e).toFixed(2)} M€ de salaire brut signable.`;
   if(masse > plafondBudget(e))
     return `Le président refuse : la masse salariale passerait à ${masse.toFixed(2)} M€ alors que le chiffre d'affaires n'en supporte que ${plafondBudget(e).toFixed(2)}. Libérez ${(masse-plafondBudget(e)).toFixed(2)} M€ en vendant ou en résiliant un contrat.`;
   return null;
@@ -2217,6 +2257,7 @@ function clorePeriodeJournee(){
   state.journee++; matchCourant = null; state.journeeVue = Math.min(state.journee+1, NB_JOURNEES);
   majConfiance();                                                                 // après l'incrément : state.journee compte les journées jouées
   if(state.journee % 6 === 0) evolutionJoueurs(false);
+  if(state.journee === JOURNEE_TOURNOI) selectionnerFrance(true);                 // fenêtre du Tournoi : la liste est revue
   if(state.journee === 18){ const fins = club().joueurs.filter(p=>p.contrat.anneesRestantes<=1).map(p=>p.nom);
     if(fins.length) actualite(`Fins de contrat en juin : ${fins.slice(0,8).join(", ")}${fins.length>8?` et ${fins.length-8} autre(s)`:""}. Prolongez-les dans l'onglet Marché, sinon ils quitteront le club.`, "erreur"); }
   if(state.journee >= NB_JOURNEES) creerPhaseFinale();
@@ -2310,7 +2351,7 @@ function majConfiance(){
   d += clamp((p.cible - rang) * 0.9, -5, 5);                           // position par rapport à l'objectif
   const moralMoyen = c.joueurs.reduce((s,x)=>s+(x.moral===undefined?70:x.moral),0) / Math.max(1,c.joueurs.length);
   d += (moralMoyen - 70) * 0.03;                                       // ambiance dans le vestiaire
-  if(masseCap(c) > SALARY_CAP) d -= 2;                                 // gestion financière
+  if(masseSalariale(c) > plafondLNR(c)) d -= 2;                        // gestion financière
   p.confiance = clamp(Math.round(p.confiance + d), 0, 100);
   p.historique.push(p.confiance); if(p.historique.length > 26) p.historique.shift();
   // Avertissements et licenciement
@@ -2396,7 +2437,7 @@ function nouvelleSaison(){
   const bonus = classementTrie().findIndex(l=>l.id===c.id) < 6 ? 1.25 : 1;      // top 6 : le président desserre les cordons
   state.enveloppe = enveloppeMercato(bonus);
   actualite(`Le président fixe l'enveloppe mercato à ${state.enveloppe.toFixed(2)} M€ et une masse salariale cible de ${masseCible().toFixed(2)} M€.`, "info");
-  state.licencie = false; definirObjectif();
+  state.licencie = false; definirObjectif(); selectionnerFrance(true);
   for(const e of Object.values(state.equipes)) for(const p of e.joueurs) if(p.approches) delete p.approches;
   for(const e of Object.values(state.equipes)) for(const p of [...e.joueurs]){
     p.age++; p.forme = 100; p.blessure = 0; p.stats = {matchs:0, essais:0, points:0, sommeNotes:0}; p.derniereNote = null;
@@ -2475,7 +2516,7 @@ function appliquerPreContrats(){
     const anc = state.equipes[p.clubId];
     if(!anc || p.clubId===c.id){ continue; }
     if(!p.jiff && nonJiff(c) >= NON_JIFF_MAX){ actualite(`Pré-contrat annulé : ${p.nom} ferait passer l'effectif au-dessus des ${NON_JIFF_MAX} non-JIFF.`, "erreur"); continue; }
-    if(!capOk(c, pc.salaire, p.jiff)){ actualite(`Pré-contrat annulé : ${p.nom} ferait dépasser le plafond LNR.`, "erreur"); continue; }
+    if(!capOk(c, pc.salaire, p)){ actualite(`Pré-contrat annulé : ${p.nom} ferait dépasser le plafond LNR.`, "erreur"); continue; }
     anc.joueurs = anc.joueurs.filter(x=>x!==p);
     p.clubId = c.id; p.salaire = pc.salaire; p.contrat = {anneesRestantes:pc.duree}; p.listeTransfert = false; c.joueurs.push(p);
     arrivees.push(`${p.nom} (${anc.court})`);
@@ -2514,7 +2555,7 @@ function faireOffre(pid, salaire, duree){
   if(!p.listeTransfert) return {ok:false, texte:`${p.nom} est sous contrat et n'est pas sur la liste des transferts.`};
   if(!(salaire>0)) return {ok:false, texte:"Indiquez un salaire annuel en k€."};
   if(c.joueurs.length >= TAILLE_EFFECTIF_MAX) return {ok:false, texte:`Effectif complet (${TAILLE_EFFECTIF_MAX} joueurs maximum).`};
-  const blocageMasse = motifMasse(c, salaire, p.jiff);
+  const blocageMasse = motifMasse(c, salaire, p);
   if(blocageMasse) return {ok:false, texte:blocageMasse};
   const indem = indemniteTransfert(p);
   if(indem > caisse(c)) return {ok:false, texte:`Trésorerie insuffisante pour l'indemnité de transfert (${indem.toFixed(2)} M€ demandés, ${caisse(c).toFixed(2)} M€ disponibles).`};
@@ -2576,7 +2617,7 @@ function demandesNegociation(p, duree, tour, precontrat){
 function creerDossier(p){
   const c = club();
   const rivaux = Object.values(state.equipes).filter(e => !e.horsChampionnat && e.id!==c.id && e.id!==p.clubId
-      && masseOk(e, p.salaire, p.jiff) && e.joueurs.length < TAILLE_EFFECTIF_MAX
+      && masseOk(e, p.salaire, p) && e.joueurs.length < TAILLE_EFFECTIF_MAX
       && (p.jiff || nonJiff(e) < NON_JIFF_MAX) && caisse(e) >= indemniteTransfert(p))
     .sort((a,b)=>b.reputation-a.reputation);
   const attractif = clamp(Math.round((moyenne(p)-11)*22 + (p.age<=25?15:0) + (p.listeTransfert?10:0)), 0, 95);
@@ -2662,7 +2703,7 @@ function controlesRecrutement(p, salaire, indemnite){
   const c = club();
   if(recrutementBloque()) return `La DNACG a interdit tout recrutement cette saison. Redressez la trésorerie avant la prochaine clôture.`;
   if(indemnite > caisse(c)) return `Trésorerie insuffisante : ${caisse(c).toFixed(2)} M€ en caisse pour ${indemnite.toFixed(2)} M€ demandés.`;
-  const blocageMasse = motifMasse(c, salaire, p.jiff);
+  const blocageMasse = motifMasse(c, salaire, p);
   if(blocageMasse) return blocageMasse;
   const masse = masseSalariale(c) + salaire/1000;
   if(masse > masseCible()) return `Le président veut garder une marge : la masse salariale passerait à ${masse.toFixed(2)} M€ pour une cible de ${masseCible().toFixed(2)} M€. Libérez ${(masse-masseCible()).toFixed(2)} M€ en vendant ou en résiliant un contrat.`;
@@ -2701,7 +2742,7 @@ function envoyerOffre(salaire, duree, indemnite){
 function prolonger(pid, salaire, duree){
   const p = joueur(pid); const c = club();
   if(!(salaire>0)) return {ok:false, texte:"Indiquez un salaire annuel en k€."};
-  const blocageMasse = motifMasse(c, salaire - p.salaire, p.jiff, true);
+  const blocageMasse = motifMasse(c, salaire - p.salaire, p, true);
   if(blocageMasse) return {ok:false, texte:blocageMasse};
   const demande = Math.round(demandeSalariale(p)*0.95);
   if(salaire < demande) return {ok:false, texte:`${p.nom} attend au moins ${demande} k€/an pour prolonger.`};
@@ -2755,7 +2796,7 @@ function genererOffresRecues(){
   const p = alea(candidats);
   if(state.offresRecues.some(o=>o.pid===p.id)) return;
   const acheteurs = Object.values(state.equipes).filter(e => !e.horsChampionnat && e.id!==c.id
-    && masseOk(e, p.salaire, p.jiff) && e.joueurs.length < TAILLE_EFFECTIF_MAX && (p.jiff || nonJiff(e) < NON_JIFF_MAX));
+    && masseOk(e, p.salaire, p) && e.joueurs.length < TAILLE_EFFECTIF_MAX && (p.jiff || nonJiff(e) < NON_JIFF_MAX));
   if(!acheteurs.length) return;
   const e = alea(acheteurs);
   const base = indemniteTransfert(p);
@@ -2786,7 +2827,7 @@ function marcheIA(){
   for(const p of club().joueurs.filter(p=>p.listeTransfert)){
     if(Math.random()>=0.15) continue;
     const indem = indemniteTransfert(p);
-    const ach = ia.filter(e => caisse(e)>=indem && masseOk(e, p.salaire, p.jiff) && e.joueurs.length<TAILLE_EFFECTIF_MAX && (p.jiff || nonJiff(e)<NON_JIFF_MAX));
+    const ach = ia.filter(e => caisse(e)>=indem && masseOk(e, p.salaire, p) && e.joueurs.length<TAILLE_EFFECTIF_MAX && (p.jiff || nonJiff(e)<NON_JIFF_MAX));
     if(!ach.length) continue;
     const e = alea(ach); club().joueurs = club().joueurs.filter(x=>x!==p); mouvementCaisse(club(), indem); mouvementCaisse(e, -indem);
     p.clubId = e.id; p.listeTransfert = false; e.joueurs.push(p); nettoyerFeuille();
@@ -2897,7 +2938,7 @@ function ameliorerCentre(){
 function blocagePassagePro(es){
   const c = club();
   if(c.joueurs.length >= TAILLE_EFFECTIF_MAX) return `Effectif complet (${TAILLE_EFFECTIF_MAX} joueurs maximum).`;
-  return motifMasse(c, salaireEspoir(es), true);
+  return motifMasse(c, salaireEspoir(es), {formeAuClub:true, international:false});
   return null;
 }
 /** Signe un espoir dans l'effectif professionnel (contrat de 3 ans). */
@@ -3750,9 +3791,9 @@ function peindreCarrousel(){
   c.slides.forEach(x=>x.classList.toggle("actif", x.dataset.club===choisi));
   document.querySelectorAll("[data-pt]").forEach(pt=>pt.classList.toggle("on", pt.dataset.club===choisi));
   const lg = document.getElementById("legende-club"); const e = apercuClubs()[choisi];
-  if(lg && e){ const ms = masseSalariale(e), mc = masseCap(e), mb = plafondBudget(e);
+  if(lg && e){ const ms = masseSalariale(e), mb = plafondBudget(e);
     const marge = Math.min(margeCap(e), mb - ms);
-    lg.innerHTML = `<strong>${echapper(e.nom)}</strong> — ${e.joueurs.filter(x=>x.jiff).length} JIFF sur ${e.joueurs.length} joueurs · masse salariale ${ms.toFixed(2)} M€, dont ${mc.toFixed(2)} retenus au salary cap (plafond ${SALARY_CAP}) · le chiffre d'affaires en supporte ${mb.toFixed(2)} · ${marge < 0.4
+    lg.innerHTML = `<strong>${echapper(e.nom)}</strong> — ${formesAuClub(e)} formés au club et ${internationaux(e)} internationaux sur ${e.joueurs.length} joueurs · masse ${ms.toFixed(2)} M€ pour un plafond LNR de ${plafondLNR(e).toFixed(2)} et un chiffre d'affaires qui en supporte ${mb.toFixed(2)} · ${marge < 0.4
       ? `<span style="color:var(--alerte);font-weight:700">marge de recrutement quasi nulle (${Math.max(0,marge).toFixed(2)} M€) : il faudra dégraisser</span>`
       : `<strong>${marge.toFixed(2)} M€</strong> de marge de recrutement`}.`; }
 }
@@ -3819,7 +3860,7 @@ function renderFiche(p){
   const c = state.equipes[p.clubId]; const mien = p.clubId===state.clubId; const f = state.feuille;
   const place = mien ? (f.titulaires.indexOf(p.id)>=0 ? `Titulaire n°${f.titulaires.indexOf(p.id)+1}` : f.banc.indexOf(p.id)>=0 ? `Remplaçant n°${16+f.banc.indexOf(p.id)}` : "Hors feuille") : "";
   return `<div class="voile" data-action="fermer-modale"><div class="modale" data-stop="1">
-    <div class="entete-fiche"><div class="numero-fiche">${p.poste}</div><div style="flex:1"><h1 style="margin:0">${echapper(p.nom)}</h1><div class="muet petit">${POSTES[p.poste]}${p.poste2?" / "+POSTES[p.poste2]:""} · ${p.age} ans · ${c?echapper(c.nom):"—"} · ${p.jiff?'<span class="badge badge-jiff">JIFF</span>':'<span class="badge badge-non">non-JIFF</span>'} ${p.blessure?`<span class="badge badge-blesse">Blessé ${p.blessure} sem.</span>`:""} ${p.listeTransfert?'<span class="badge badge-liste">Transférable</span>':""} ${p.joker?'<span class="badge badge-liste">Joker</span>':""}</div></div><button class="btn btn-petit" data-action="fermer-modale">✕</button></div>
+    <div class="entete-fiche"><div class="numero-fiche">${p.poste}</div><div style="flex:1"><h1 style="margin:0">${echapper(p.nom)}</h1><div class="muet petit">${POSTES[p.poste]}${p.poste2?" / "+POSTES[p.poste2]:""} · ${p.age} ans · ${c?echapper(c.nom):"—"} · ${p.jiff?'<span class="badge badge-jiff">JIFF</span>':'<span class="badge badge-non">non-JIFF</span>'} ${p.international?'<span class="badge badge-france">XV de France</span>':""} ${p.blessure?`<span class="badge badge-blesse">Blessé ${p.blessure} sem.</span>`:""} ${p.listeTransfert?'<span class="badge badge-liste">Transférable</span>':""} ${p.joker?'<span class="badge badge-liste">Joker</span>':""}</div></div><button class="btn btn-petit" data-action="fermer-modale">✕</button></div>
     <div class="grille grille-2"><div>${radarSVG(p)}</div>
       <div class="fiche-infos"><div><b>Niveau</b><span class="kpi" style="font-size:1.3rem">${moyenne(p).toFixed(1)}</span></div><div><b>Potentiel</b>${potentielAffiche(p)}</div><div><b>Caractère</b>${PERSONNALITES[p.perso].nom}</div><div><b>Forme</b>${p.forme}/100</div>
         <div><b>Salaire</b>${p.salaire} k€/an</div><div><b>Contrat</b>${p.contrat.anneesRestantes} an(s)</div><div><b>Saison</b>${p.stats.matchs} matchs · ${p.stats.essais} essais</div><div><b>Note moyenne</b>${p.stats.matchs&&p.stats.sommeNotes?badgeNote(Math.round(p.stats.sommeNotes/p.stats.matchs*10)/10):"—"}</div><div><b>Dernier match</b>${p.derniereNote?badgeNote(p.derniereNote):"—"}</div><div><b>Records</b>${p.records&&p.records.matchsTotal?`${p.records.matchsTotal} match(s), meilleure note ${p.records.meilleureNote||"—"}, record d'essais ${p.records.essaisSaison||0}`:"—"}</div>${mien?`<div><b>Feuille</b>${place}</div>`:""}</div></div>
@@ -3853,15 +3894,16 @@ function renderEntete(){
     : matchJoueurAujourdhui() ? "⚡ Jour de match"
     : "Continuer ▶";
   const ecr = ECRANS.find(e=>e[0]===state.ecran);
-  const ms = masseSalariale(c); const partCap = clamp(masseCap(c) / SALARY_CAP * 100, 0, 100);
-  const couleurCap = masseCap(c) > SALARY_CAP ? "var(--alerte)" : ms > masseCible() ? "var(--jaune)" : "var(--ok)";
+  const ms = masseSalariale(c); const plafLNR = plafondLNR(c);
+  const partCap = clamp(ms / plafLNR * 100, 0, 100);
+  const couleurCap = ms > plafLNR ? "var(--alerte)" : ms > masseCible() ? "var(--jaune)" : "var(--ok)";
   const env = state.enveloppe || 0; const partEnv = clamp(env / Math.max(0.01, c.budget * PART_ENVELOPPE) * 100, 0, 100);
   h.innerHTML = `<button class="btn btn-petit menu" data-action="menu" aria-label="Menu">☰</button>
     <span class="titre">${ecr ? ecr[1] : "Rugby Manager"}</span>
     <span class="meta">
       <span class="bloc-meta meta-saison"><span class="lbl">Saison</span><span class="vl">${etape}</span></span>
       <span class="bloc-meta"><span class="lbl">${TYPES_SEMAINE[infoJour().semaine.type].nom}</span><span class="vl" style="text-transform:capitalize">${formatDate(state.date, true)}</span></span>
-      <span class="bloc-meta meta-secondaire"><span class="lbl">Salary cap</span><span class="vl">${masseCap(c).toFixed(2)} <span class="muet petit">/ ${SALARY_CAP}</span></span>
+      <span class="bloc-meta meta-secondaire"><span class="lbl">Salary cap</span><span class="vl">${ms.toFixed(2)} <span class="muet petit">/ ${plafLNR.toFixed(1)}</span></span>
         <span class="jauge-fine"><i style="width:${partCap}%;background:${couleurCap};box-shadow:0 0 8px ${couleurCap}"></i></span></span>
       <span class="bloc-meta meta-secondaire"><span class="lbl">Enveloppe</span><span class="vl">${env.toFixed(2)} M€</span>
         <span class="jauge-fine"><i style="width:${partEnv}%;background:var(--club);box-shadow:0 0 8px var(--club)"></i></span></span>
@@ -4095,7 +4137,7 @@ function renderDashboard(){
     <div class="kpi-carte">${anneau((15-rang)/14*100, rang<=6?"var(--ok)":rang>=13?"var(--alerte)":"var(--jaune)")}<div class="lib">Classement</div><div class="val">${rang}<span class="petit muet">e</span></div><div class="sous">${cl[rang-1]?cl[rang-1].pts:0} pts · ${cl[rang-1]?cl[rang-1].j:0} matchs</div></div>
     <div class="kpi-carte"><div class="lib">Forme</div><div class="val forme-serie">${forme.length?forme.map(x=>`<span class="${x}">${x}</span>`).join(""):'<span class="petit muet">—</span>'}</div><div class="sous">5 derniers matchs</div></div>
     ${state.president ? `<div class="kpi-carte">${anneau(state.president.confiance, state.president.confiance<=25?"var(--alerte)":state.president.confiance<=45?"var(--jaune)":"var(--ok)")}<div class="lib">Confiance</div><div class="val" style="color:${state.president.confiance<=25?'var(--alerte)':state.president.confiance>=70?'var(--ok)':'inherit'}">${state.president.confiance}</div><div class="sous">${echapper(state.president.libelle)}</div></div>` : ""}
-    <div class="kpi-carte kpi-secondaire">${anneau(masseCap(c)/SALARY_CAP*100, ms>masseCible()?"var(--alerte)":"var(--club)")}<div class="lib">Masse salariale</div><div class="val" style="color:${ms>masseCible()?'var(--alerte)':'inherit'}">${ms.toFixed(2)}</div><div class="sous">${masseCap(c).toFixed(2)} au cap · cible ${masseCible().toFixed(2)} M€</div></div>
+    <div class="kpi-carte kpi-secondaire">${anneau(ms/plafondLNR(c)*100, ms>masseCible()?"var(--alerte)":"var(--club)")}<div class="lib">Masse salariale</div><div class="val" style="color:${ms>masseCible()?'var(--alerte)':'inherit'}">${ms.toFixed(2)}</div><div class="sous">plafond LNR ${plafondLNR(c).toFixed(2)} · cible ${masseCible().toFixed(2)} M€</div></div>
     <div class="kpi-carte kpi-secondaire">${anneau(moyJ===null?0:moyJ/23*100, moyJ!==null&&moyJ<MIN_JIFF?"var(--alerte)":"var(--ok)")}<div class="lib">Moyenne JIFF</div><div class="val" style="color:${moyJ!==null&&moyJ<MIN_JIFF?'var(--alerte)':'inherit'}">${moyJ===null?"—":moyJ.toFixed(2)}</div><div class="sous">objectif ${MIN_JIFF} · non-JIFF ${nonJiff(c)}/${NON_JIFF_MAX}</div></div>
   </div>`;
 
@@ -4196,10 +4238,10 @@ function renderEffectif(){
       <div class="choix">${auP.map(ligne).join("")}${hors.length?`<div class="petit muet" style="margin-top:.4rem">Hors poste (−10 %)</div>`:""}${type==="t"?hors.map(ligne).join(""):""}</div>`;
   }
   return `<div class="carte"><h1>Effectif — ${echapper(c.nom)}</h1>
-    <p class="muet petit">${c.joueurs.length} joueurs · ${c.joueurs.filter(p=>p.jiff).length} JIFF · masse salariale ${masseSalariale(c).toFixed(2)} M€, dont ${masseCap(c).toFixed(2)} retenus au salary cap (plafond ${SALARY_CAP}). Cliquez sur un nom pour ouvrir sa fiche, sur un en-tête pour trier.</p>
+    <p class="muet petit">${c.joueurs.length} joueurs · ${c.joueurs.filter(p=>p.jiff).length} JIFF · ${formesAuClub(c)} formés au club · ${internationaux(c)} internationaux · masse salariale ${masseSalariale(c).toFixed(2)} M€ pour un plafond LNR de ${plafondLNR(c).toFixed(2)} M€. Cliquez sur un nom pour ouvrir sa fiche, sur un en-tête pour trier.</p>
     <div class="filtres"><input type="text" placeholder="Rechercher un joueur" value="${echapper(state.filtreNom||"")}" data-filtre="nom"><select data-filtre="poste"><option value="">Tous les postes</option>${Object.keys(POSTES).map(po=>`<option value="${po}" ${filtreP===po?"selected":""}>${POSTES[po]}</option>`).join("")}</select></div>
     <div class="defilable"><table class="tbl fige"><thead><tr>${th("nom","Joueur")}${th("poste","Poste")}${th("age","Âge")}${th("jiff","JIFF")}${ATTRIBUTS.map(([k,l,ab])=>th(k,ab)).join("")}${th("moy","Moy.")}${th("potentiel","Pot.")}${th("noteMoy","Note")}${th("perso","Caractère")}${th("forme","Forme")}${th("salaire","Salaire")}${th("contrat","Contrat")}<th>Statut</th><th>M / E</th></tr></thead>
-    <tbody>${joueurs.map(p=>`<tr><td><button class="lien-joueur" data-action="fiche" data-pid="${p.id}">${echapper(p.nom)}</button></td><td>${POSTES[p.poste]}${p.poste2?` <span class="petit muet">/ ${POSTES[p.poste2]}</span>`:""}</td><td class="num">${p.age}</td><td>${badgeJiff(p)}</td>${ATTRIBUTS.map(([k])=>note(p.attr[k])).join("")}<td class="num moy">${moyenne(p).toFixed(1)}</td><td class="num muet">${potentielAffiche(p)}</td><td>${p.stats.matchs&&p.stats.sommeNotes?badgeNote(Math.round(p.stats.sommeNotes/p.stats.matchs*10)/10):'<span class="muet">–</span>'}</td><td><span class="badge badge-perso">${PERSONNALITES[p.perso].nom}</span>${p.formeAuClub?' <span class="badge badge-forme-club">formé ici</span>':""}${state.capitaine===p.id?' <span class="badge badge-capitaine">capitaine</span>':""}</td><td>${jauge(p.forme)}</td><td class="num">${p.salaire} k€</td><td class="num">${p.contrat.anneesRestantes} an(s)</td>
+    <tbody>${joueurs.map(p=>`<tr><td><button class="lien-joueur" data-action="fiche" data-pid="${p.id}">${echapper(p.nom)}</button></td><td>${POSTES[p.poste]}${p.poste2?` <span class="petit muet">/ ${POSTES[p.poste2]}</span>`:""}</td><td class="num">${p.age}</td><td>${badgeJiff(p)}</td>${ATTRIBUTS.map(([k])=>note(p.attr[k])).join("")}<td class="num moy">${moyenne(p).toFixed(1)}</td><td class="num muet">${potentielAffiche(p)}</td><td>${p.stats.matchs&&p.stats.sommeNotes?badgeNote(Math.round(p.stats.sommeNotes/p.stats.matchs*10)/10):'<span class="muet">–</span>'}</td><td><span class="badge badge-perso">${PERSONNALITES[p.perso].nom}</span>${p.formeAuClub?' <span class="badge badge-forme-club">formé ici</span>':""}${p.international?' <span class="badge badge-france">XV de France</span>':""}${state.capitaine===p.id?' <span class="badge badge-capitaine">capitaine</span>':""}</td><td>${jauge(p.forme)}</td><td class="num">${p.salaire} k€</td><td class="num">${p.contrat.anneesRestantes} an(s)</td>
       <td>${p.blessure>0?`<span class="badge badge-blesse">Blessé ${p.blessure} sem.</span>`:p.listeTransfert?'<span class="badge badge-liste">Transférable</span>':'<span class="petit muet">Disponible</span>'}</td><td class="num">${p.stats.matchs} / ${p.stats.essais}</td></tr>`).join("")}</tbody></table></div>
     <p class="petit muet">${ATTRIBUTS.map(([k,l,ab])=>`${ab} = ${l}`).join(", ")}. Pot. = potentiel (niveau maximal atteignable, joueurs de 26 ans et moins). M / E = matchs / essais.</p></div>
   <h1>Feuille de match</h1>
@@ -4424,10 +4466,11 @@ function renderMarche(){
     <div class="carte"><p><strong>Mercato ${fen.libelle}.</strong> ${joker ? "Un joker médical est autorisé (blessé de longue durée dans votre effectif)." : ""} <span class="petit muet">Fenêtres : intersaison et J${MERCATO_HIVER[0]}-J${MERCATO_HIVER[1]}.</span></p>
     <div class="kpis" style="margin-bottom:.3rem">
       <div class="kpi-carte"><div class="lib">Enveloppe mercato</div><div class="val" style="color:${state.enveloppe<=0?'var(--alerte)':'inherit'}">${state.enveloppe.toFixed(2)}<span class="petit muet"> M€</span></div><div class="sous">fixée par le président · budget club ${c.budget.toFixed(1)} M€</div></div>
-      <div class="kpi-carte"><div class="lib">Marge salariale</div><div class="val" style="color:${margeSalariale()<=0.1?'var(--alerte)':'inherit'}">${margeSalariale().toFixed(2)}<span class="petit muet"> M€</span></div><div class="sous">bridé par ${plafondLimitant()==="LNR" ? `le <strong>salary cap</strong> : ${masseCap(c).toFixed(2)} / ${SALARY_CAP} M€ retenus` : `le <strong>chiffre d'affaires</strong> : ${ms.toFixed(2)} / ${plafondBudget(c).toFixed(2)} M€`}</div></div>
+      <div class="kpi-carte"><div class="lib">Marge salariale</div><div class="val" style="color:${margeSalariale()<=0.1?'var(--alerte)':'inherit'}">${margeSalariale().toFixed(2)}<span class="petit muet"> M€</span></div><div class="sous">bridé par ${plafondLimitant()==="LNR" ? `le <strong>salary cap</strong> : ${ms.toFixed(2)} / ${plafondLNR(c).toFixed(2)} M€` : `le <strong>chiffre d'affaires</strong> : ${ms.toFixed(2)} / ${plafondBudget(c).toFixed(2)} M€`}</div></div>
       <div class="kpi-carte"><div class="lib">Recrues extérieures</div><div class="val">${state.recruesSaison} / ${MAX_RECRUES}</div><div class="sous">non-JIFF ${nonJiff(c)}/${NON_JIFF_MAX} · effectif ${c.joueurs.length}/${TAILLE_EFFECTIF_MAX}</div></div>
       <div class="kpi-carte"><div class="lib">Pré-contrats</div><div class="val">${(state.preContrats||[]).length} / ${MAX_RECRUES}</div><div class="sous">${fenetrePreContrat()?"ouverts (dernière année de contrat)":`à partir de la J${MERCATO_HIVER[0]}`}</div></div>
     </div>
+    <p class="petit muet">Plafond LNR du club : <strong>${plafondLNR(c).toFixed(2)} M€</strong> = socle ${SALARY_CAP} + <strong>${creditFormation(c).toFixed(2)}</strong> de crédit formation (${formesAuClub(c)} joueurs formés au club) + <strong>${creditInternational(c).toFixed(2)}</strong> de crédit international (${internationaux(c)} sélectionné${internationaux(c)>1?"s":""} en équipe de France). Former et fournir la sélection élargit votre plafond ; les deux crédits sont plafonnés à ${CREDIT_FORMATION_MAX} et ${CREDIT_INTERNATIONAL_MAX} M€.</p>
     <p class="petit muet">Salaire maximal finançable aujourd'hui : <strong>${Math.max(0, Math.floor(margeSalariale()*1000))} k€/an</strong>. Pour recruter au-dessus, vendez un joueur, résiliez un contrat ou attendez une fin de contrat.
     ${(() => { const ex = exerciceEnCours(); const apres = Math.round((ex.resultat - Math.max(0, margeSalariale()))*100)/100;
       return `Attention : la marge n'est pas gratuite. Résultat d'exercice projeté <strong>${ex.resultat.toFixed(2)} M€</strong> ; en consommant toute la marge salariale il tomberait à <strong style="color:${apres<0?'var(--alerte)':'inherit'}">${apres.toFixed(2)} M€</strong>${apres<0?", et la DNACG s'en mêlerait à la clôture":""}.`; })()}</p>
