@@ -980,7 +980,7 @@ function recitsJournee(){
   if(suivante){
     const pm = suivante.matchs.find(x=>x.dom===state.clubId||x.ext===state.clubId);
     if(pm){ const advS = state.equipes[pm.dom===state.clubId?pm.ext:pm.dom]; const riv = rivalite(state.clubId, advS.id);
-      if(riv) actualite(`${riv} en vue : ${c.court} reçoit${pm.dom===state.clubId?"":" non, se déplace chez"} ${advS.court} la journée prochaine. Le stade sera plein.`, "info");
+      if(riv) actualite(`${riv} en vue : ${c.court} ${pm.dom===state.clubId?"reçoit":"se déplace chez"} ${advS.court} la journée prochaine. Le stade sera plein.`, "info");
       else if(cl.findIndex(l=>l.id===advS.id) < 3 && rang <= 6) actualite(`Choc au sommet la journée prochaine face à ${advS.court}, ${cl.findIndex(l=>l.id===advS.id)+1}e du classement.`, "info"); }
   }
 }
@@ -1798,8 +1798,9 @@ function clorePeriodeJournee(){
   const mien = j.matchs.find(x=>x.dom===state.clubId||x.ext===state.clubId);
   if(mien){ const dom = mien.dom===state.clubId; const r = mien.resultat; const pp = dom?r.sd:r.se, pc = dom?r.se:r.sd;
     actualite(`J${j.numero} : ${pp>pc?"victoire":pp===pc?"match nul":"défaite"} ${pp}-${pc} contre ${state.equipes[dom?mien.ext:mien.dom].court}.`, pp>pc?"ok":"info"); }
-  recitsJournee(); majConfiance(); marcheIA(); genererOffresRecues();              // récupération et entraînement : voir effetsDuJour()
+  recitsJournee(); marcheIA(); genererOffresRecues();                             // récupération et entraînement : voir effetsDuJour()
   state.journee++; matchCourant = null; state.journeeVue = Math.min(state.journee+1, NB_JOURNEES);
+  majConfiance();                                                                 // après l'incrément : state.journee compte les journées jouées
   if(state.journee % 6 === 0) evolutionJoueurs(false);
   if(state.journee === 18){ const fins = club().joueurs.filter(p=>p.contrat.anneesRestantes<=1).map(p=>p.nom);
     if(fins.length) actualite(`Fins de contrat en juin : ${fins.slice(0,8).join(", ")}${fins.length>8?` et ${fins.length-8} autre(s)`:""}. Prolongez-les dans l'onglet Marché, sinon ils quitteront le club.`, "erreur"); }
