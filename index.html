@@ -677,6 +677,39 @@ const FRAIS_PLACE = 0.32;          // ...par millier de places à entretenir
 const FRAIS_JOUEUR = 0.17;          // ...par joueur sous contrat (staff, médical, matériel)
 const FRAIS_STANDING = 0.075;      // ...par point de réputation (salaires du staff, coupe d'Europe)
 const PRIMES_PHASE = {qualifie:0.8, demi:1.3, finale:2.0, titre:3.0};
+/* ---- Identité du manager ---------------------------------------------- */
+/** Parcours d'origine : fixe la réputation de départ, donc les attentes du président. */
+const PROFILS_MANAGER = {
+  international:{nom:"Ancien international", reputation:78,
+    desc:"Votre carrière de joueur vous précède. Les portes s'ouvrent, les exigences aussi : le président attendra beaucoup, et vite."},
+  prod2:{nom:"Entraîneur de Pro D2", reputation:58,
+    desc:"Vous avez fait vos preuves à l'étage inférieur. On vous accorde du crédit, pas un chèque en blanc."},
+  consultant:{nom:"Consultant reconverti", reputation:50,
+    desc:"Vous avez commenté les matchs des autres pendant des années. À vous de montrer que vous saviez de quoi vous parliez."},
+  formation:{nom:"Promu du centre de formation", reputation:38,
+    desc:"Vous avez grandi dans la maison. Personne ne vous attend au sommet, ce qui vous laisse le temps de bâtir."}
+};
+/** Un trait de caractère, une force et une faiblesse. */
+const TRAITS_MANAGER = {
+  formateur:{nom:"Formateur", plus:"Les espoirs du centre progressent nettement plus vite",
+    moins:"Vous délaissez les trentenaires, qui ne progressent presque plus"},
+  negociateur:{nom:"Négociateur", plus:"Les clubs vendeurs acceptent bien plus souvent d'ouvrir la discussion",
+    moins:"Votre réputation de dur en affaires fait monter les prétentions salariales"},
+  tacticien:{nom:"Tacticien", plus:"Le capitaine vous consulte bien plus souvent pendant le match",
+    moins:"Vous passez pour un technicien froid : le moral du groupe monte moins vite"},
+  gestionnaire:{nom:"Gestionnaire", plus:"Frais de structure réduits de dix pour cent",
+    moins:"Vous négligez la communication : les partenaires versent moins"},
+  meneur:{nom:"Meneur d'hommes", plus:"Vestiaire soudé et récupération physique plus rapide",
+    moins:"Vous ménagez trop vos joueurs : les entraînements font moins progresser"},
+  denicheur:{nom:"Dénicheur", plus:"Votre recruteur explore plus largement et remonte plus de pistes",
+    moins:"Le président se méfie de vos coups de cœur : enveloppe mercato réduite"}
+};
+const NATIONALITES = ["France","Nouvelle-Zélande","Afrique du Sud","Australie","Angleterre","Irlande",
+                      "Écosse","Pays de Galles","Argentine","Italie","Géorgie","Fidji","Samoa","Roumanie"];
+/** Trait du manager en cours de partie. */
+const traitManager = () => (state.manager && state.manager.trait) || null;
+const aTrait = k => traitManager() === k;
+
 /** Sévérité de la DNACG. Baisser ces seuils rend la gestion plus permissive. */
 const DNACG = {avertissement:0, recrutementBloque:-2, retraitPoints:-5, pointsRetires:6};
 const TAILLE_EFFECTIF_MAX = 38;
@@ -992,6 +1025,16 @@ function creerJoueur(ligne, clubId, idx){
     contrat:{anneesRestantes: 1 + ((idx||0) % 3)}, listeTransfert:false,
     stats:{matchs:0, essais:0, points:0, sommeNotes:0} };
 }
+/** Construit le manager à partir des choix de création. */
+function creerManager(id){
+  const i = id || {};
+  const prenom = (i.prenom||"").trim(), nomFamille = (i.nom||"").trim();
+  const profil = PROFILS_MANAGER[i.profil] ? i.profil : "prod2";
+  const trait = TRAITS_MANAGER[i.trait] ? i.trait : "formateur";
+  return {prenom, nomFamille, nationalite: i.nationalite || "France", profil, trait,
+          nom: `${prenom} ${nomFamille}`.trim() || "Manager",
+          reputation: PROFILS_MANAGER[profil].reputation, carriere:[], offres:[]};
+}
 /** Variation déterministe -1/0/+1 dérivée du nom (pas d'aléa au rechargement). */
 function bruit(s){ let h = 0; for(const c of s) h = (h*31 + c.charCodeAt(0)) & 0xffff; return (h % 3) - 1; }
 function salaireIndicatif(niv){ return Math.round(60 + Math.pow(Math.max(0, niv-8), 2) * 9); }
@@ -1029,7 +1072,7 @@ function genererCalendrier(ids){
 function classementVide(ids){ const c = {}; for(const id of ids) c[id] = {pts:0,j:0,g:0,n:0,p:0,bo:0,bd:0,pm:0,pe:0}; return c; }
 const idsChampionnat = () => Object.values(state.equipes).filter(e=>!e.horsChampionnat).map(e=>e.id);
 
-function nouvellePartie(clubId, nomManager){
+function nouvellePartie(clubId, identite){
   prochainId = 1;
   const equipes = hydraterEquipes();
   state = {
@@ -1040,7 +1083,7 @@ function nouvellePartie(clubId, nomManager){
       schemas:{...SCHEMAS_DEFAUT}, auto:{...AUTO_DEFAUT}},
     tri:{cle:"moy", desc:true}, ongletMarche:"recruteur", journeeVue:1,
     consignes:{...CONSIGNES_DEFAUT}, ecran:"dashboard", actualites:[], palmares:[],
-    manager:{nom: (nomManager||"").trim() || "Manager", reputation:55, carriere:[], offres:[]}, capitaine:null,
+    manager: creerManager(identite), capitaine:null,
     president:null, licencie:false, semaine:{...SEMAINE_DEFAUT}, vue:"jeu", editeurClub:null, exportDB:null, slotSel:null, negociation:null, jiffHist:[], jokerUtilise:false, theme:"sombre", rapports:{}, ficheJoueur:null, rapportVue:null, filtrePoste:"", filtreNom:"", filtreFil:"tout",
     enveloppe:0, recruesSaison:0, dossiers:{}, preContrats:[], shortlist:[], recherche:{poste:"", ageMax:40, jiff:"", nivMin:0, salMax:2000, finContrat:false, nom:""}, offresRecues:[], rapportRecruteur:null
   };
@@ -1788,7 +1831,8 @@ function jouerMinute(m){
   else if((r -= pFaute) < 0){                                              // FAUTE DE LA DÉFENSE
     const fautif = alea(def.terrain); const k = buteur(att);
     // Moment-clé : à portée de perches, dans un match serré ou en fin de rencontre, le manager tranche
-    if(peutInterrompre(m, att) && dist <= 45 && k && (Math.abs(att.score-def.score) <= 7 || min >= 60) && Math.random() < 0.55){
+    if(peutInterrompre(m, att) && dist <= 45 && k && (Math.abs(att.score-def.score) <= 7 || min >= 60)
+       && Math.random() < (att.id===state.clubId && aTrait("tacticien") ? 0.82 : 0.55)){
       ouvrirDecision(m, {type:"penalite", cote: att===m.dom?"dom":"ext", dist, fautif:fautif.pid, buteur:k.pid,
         titre:`Pénalité à ${Math.round(dist+12)} m`,
         texte:`Faute de ${nomJ(fautif.pid)} ${zone}. ${att.nom} mène-t-il ${att.score}-${def.score} ? Le capitaine attend votre consigne.`,
@@ -1981,7 +2025,9 @@ function appliquerEffetsJoueurs(m){
     p.records = p.records || {meilleureNote:0, essaisSaison:0, matchsTotal:0}; p.records.matchsTotal++;
     const n = m.notes[pid]; if(n!==undefined){ p.stats.sommeNotes = (p.stats.sommeNotes||0) + n; p.derniereNote = n;
       if(n > (p.records.meilleureNote||0)) p.records.meilleureNote = n;
-      p.moral = clamp((p.moral===undefined?70:p.moral) + (n>=7.5?4:n>=6?1:-3), 0, 100); } }
+      const gain = (n>=7.5?4:n>=6?1:-3);
+      const mod = c.id!==state.clubId ? 1 : aTrait("meneur") ? 1.5 : aTrait("tacticien") ? 0.6 : 1;
+      p.moral = clamp((p.moral===undefined?70:p.moral) + (gain>0 ? gain*mod : gain), 0, 100); } }
   for(const [pid,n] of Object.entries(m.marqueurs)){ const p = joueur(+pid); p.stats.essais += n; p.stats.points += n*5;
     p.records = p.records || {meilleureNote:0, essaisSaison:0, matchsTotal:0}; if(p.stats.essais > (p.records.essaisSaison||0)) p.records.essaisSaison = p.stats.essais; }
   for(const b of m.blessures) joueur(b.pid).blessure = Math.max(joueur(b.pid).blessure, b.semaines);
@@ -2041,7 +2087,9 @@ function entrainementSemaine(impose){
     if(axe.attrs.length && p.blessure===0 && moyenne(p) < (p.potentiel||0)){
       const concerne = axe.cible==="tous" || (axe.cible==="avants" ? AVANTS.includes(p.poste) : !AVANTS.includes(p.poste));
       if(concerne){
-        const base = p.age<=23 ? 0.16 : p.age<=27 ? 0.09 : 0.04;
+        const base = (p.age<=23 ? 0.16 : p.age<=27 ? 0.09 : 0.04)
+          * (aTrait("formateur") && p.age >= 30 ? 0.4 : 1)                    // un formateur délaisse ses vétérans
+          * (aTrait("meneur") ? 0.85 : 1);                                    // un meneur ménage son groupe
         const chance = base * inte.progres * (p.perso==="bosseur" ? 1.6 : p.perso==="insouciant" ? 0.7 : 1);
         if(Math.random() < chance){ const k = alea(axe.attrs); const av = p.attr[k];
           p.attr[k] = clamp(p.attr[k]+1, 1, 20);
@@ -2138,7 +2186,8 @@ function clorePhase(){
 function definirObjectif(){
   const c = club(); const attendu = rangAttendu(c.id); const m = state.manager;
   // Un manager réputé se voit confier des ambitions plus élevées
-  const ajust = m.reputation >= 80 ? -2 : m.reputation >= 65 ? -1 : m.reputation <= 35 ? 1 : 0;
+  // Seuils resserrés : sans cela les quatre parcours d'origine débouchaient sur le même objectif.
+  const ajust = m.reputation >= 72 ? -2 : m.reputation >= 55 ? -1 : m.reputation >= 45 ? 0 : 2;
   const cible = clamp(attendu + ajust, 1, 13);
   const tolerance = cible <= 2 ? 4 : cible <= 6 ? 4 : 3;
   const libelle = cible === 1 ? "remporter le Bouclier de Brennus"
@@ -2343,6 +2392,7 @@ function ouvertureClubVendeur(p){
   const memePoste = e.joueurs.filter(x => x.id!==p.id && auPoste(x, p.poste) && moyenne(x) >= moyenne(p) - 1).length;
   o += memePoste * 7;                                                    // doublon au poste : le club lâche plus vite
   if(masseSalariale(e) > SALARY_CAP - 0.3) o += 12;                      // club au plafond : vendeur
+  if(aTrait("negociateur")) o += 14;                                     // on vous répond plus volontiers
   return clamp(Math.round(o), 0, 95);
 }
 /** Le club accepte-t-il d'ouvrir la discussion ? (tirage unique mémorisé par saison) */
@@ -2410,7 +2460,8 @@ function motifRefus(p){
 /** Exigences du joueur et du club vendeur à un tour donné (chacun concède un peu à chaque tour). */
 function demandesNegociation(p, duree, tour, precontrat){
   const interet = interetJoueur(p, duree);
-  const exigence = (precontrat ? 1.3 : 1) * (p.listeTransfert ? 1 : 1.12);   // libre : il se sait courtisé, il monte ses prétentions
+  const exigence = (precontrat ? 1.3 : 1) * (p.listeTransfert ? 1 : 1.12)    // libre : il se sait courtisé, il monte ses prétentions
+    * (aTrait("negociateur") ? 1.07 : 1);                                    // votre réputation de dur fait monter les prétentions
   const salaire = Math.round(demandeSalariale(p) * exigence * (1.25 - interet/200) * (1 - (tour-1)*0.04));
   const indemnite = precontrat ? 0 : Math.round(indemniteTransfert(p) * (1 - (tour-1)*0.08) * 100)/100;
   return {interet, salaire, indemnite};
@@ -2570,14 +2621,15 @@ function postesFaibles(){
  * compatibles avec le salary cap, le budget et la règle des non-JIFF.
  */
 function rapportRecruteur(){
-  const c = club(); const faibles = postesFaibles().slice(0,3); const marge = margeSalariale();
+  const c = club(); const large = aTrait("denicheur");
+  const faibles = postesFaibles().slice(0, large ? 4 : 3); const marge = margeSalariale();
   const pistes = faibles.map(f => {
     const cibles = Object.values(state.equipes).filter(e=>!e.horsChampionnat && e.id!==c.id)
       .flatMap(e=>e.joueurs).filter(p => auPoste(p, f.poste) && p.blessure===0
         && demandeSalariale(p)/1000 <= marge && (indemniteTransfert(p) <= state.enveloppe || (preContratPossible(p) && fenetrePreContrat()))
         && (p.jiff || nonJiff(c) < NON_JIFF_MAX) && moyenne(p) > f.titulaire - 0.5 && joueurEcoute(p, 3))
       .map(p => ({p, note: moyenne(p)*2 + (p.listeTransfert?3:0) + (p.jiff?1.5:0) + (p.contrat.anneesRestantes<=1?4:0) + interetJoueur(p,3)*0.06 - indemniteTransfert(p)*1.2 - (p.age>=33?2:0)}))
-      .sort((a,b)=>b.note-a.note).slice(0,4).map(x=>x.p);
+      .sort((a,b)=>b.note-a.note).slice(0, large ? 6 : 4).map(x=>x.p);
     return {...f, cibles};
   });
   return {date:`S${state.saison} J${state.journee+1}`, marge, pistes};
@@ -2706,7 +2758,8 @@ function intersaisonCentreFormation(){
     if(e.horsChampionnat) continue;
     const cf = obtenirCentre(e); const moi = e.id===state.clubId;
     for(const es of cf.espoirs){
-      const pas = 2 + cf.niveau + bonusInvestissement(cf) + (es.perso==="bosseur" ? 1 : 0) + Math.floor(Math.random()*2);
+      const pas = 2 + cf.niveau + bonusInvestissement(cf) + (es.perso==="bosseur" ? 1 : 0)
+        + (moi && aTrait("formateur") ? 2 : 0) + Math.floor(Math.random()*2);
       for(let i=0; i<pas && moyenne(es) < es.potentiel; i++){
         const dispo = cles.filter(k=>es.attr[k] < 20); if(!dispo.length) break;
         const k = alea(dispo); es.attr[k] = clamp(es.attr[k]+1, 1, 20);
@@ -2863,7 +2916,8 @@ function simulerMatchDuJour(){
 function effetsDuJour(info){
   const {semaine:w, jour} = info;
   for(const e of Object.values(state.equipes)) for(const p of e.joueurs){
-    p.forme = clamp(Math.round(p.forme + (GAIN_FORME_JOUR[w.type] || 4)), 5, 100);
+    p.forme = clamp(Math.round(p.forme + (GAIN_FORME_JOUR[w.type] || 4)
+      + (e.id === state.clubId && aTrait("meneur") ? 1 : 0)), 5, 100);
     if(jour===0) p.blessure = Math.max(0, p.blessure-1);                                     // les blessures se comptent en semaines
     if(jour===6 && (w.type==="off" || w.type==="treve")) p.blessure = Math.max(0, p.blessure-1); // soins renforcés hors match
   }
@@ -2895,7 +2949,40 @@ function passerJour(){
  * dès que quelque chose vous attend : un événement à trancher, un jour de match,
  * la fin de la saison. Un second appui met en pause.
  */
-const RYTHME_CALENDRIER = 150;    // millisecondes par jour affiché
+const RYTHME_CALENDRIER = 650;    // millisecondes par jour affiché, soit un mois en vingt secondes
+/** Un match disputé mais dont le résultat n'a pas encore été entériné. */
+const matchAValider = () => !!(matchCourant && matchCourant.termine);
+/** Moments sur lesquels le défilement du calendrier peut s'interrompre. */
+const ARRETS = {
+  offre:   "Offre reçue pour un de vos joueurs",
+  mercato: "Ouverture et fermeture du mercato",
+  derby:   "Veille d'un derby",
+  semaine: "Début de semaine de match",
+  treve:   "Début de week-off ou de trêve"
+};
+const ARRETS_DEFAUT = {offre:true, mercato:true, derby:true, semaine:false, treve:false};
+const reglagesArrets = () => ({...ARRETS_DEFAUT, ...(state.arrets||{})});
+function etatCalendrier(){
+  const info = infoJour();
+  return {offres:(state.offresRecues||[]).length, mercato: mercatoOuvert().ouvert, jour:info.jour, type:info.semaine.type};
+}
+/** Le derby que votre club dispute à la prochaine journée, s'il y en a un. */
+function derbyProchain(){
+  if(state.phase || !state.calendrier) return null;
+  const j = state.calendrier[state.journee]; if(!j) return null;
+  const mt = j.matchs.find(x=>x.dom===state.clubId || x.ext===state.clubId);
+  return mt ? rivalite(mt.dom, mt.ext) : null;
+}
+/** Raison d'interrompre le défilement, ou null pour continuer. */
+function raisonArret(avant){
+  const a = reglagesArrets(), ap = etatCalendrier();
+  if(a.offre && ap.offres > avant.offres) return "Une offre vient d'arriver pour un de vos joueurs.";
+  if(a.mercato && ap.mercato !== avant.mercato) return ap.mercato ? "Le mercato vient d'ouvrir." : "Le mercato vient de fermer.";
+  if(a.semaine && ap.jour===0 && ap.type==="match") return "Début de semaine de match.";
+  if(a.treve && ap.jour===0 && (ap.type==="off" || ap.type==="treve")) return `${TYPES_SEMAINE[ap.type].nom} : le groupe souffle.`;
+  if(a.derby && ap.jour===JOUR_MATCH-1){ const d = derbyProchain(); if(d) return `${d} demain.`; }
+  return null;
+}
 function arreterCalendrier(){ if(tickCalendrier){ clearInterval(tickCalendrier); tickCalendrier = null; } }
 function calendrierBloque(){
   return !!(state.evenement || matchJoueurAujourdhui() || matchCourant
@@ -2903,14 +2990,19 @@ function calendrierBloque(){
 }
 function continuerCalendrier(){
   if(tickCalendrier){ arreterCalendrier(); render(); return; }
+  // Un match terminé se valide d'un seul geste : auparavant « Continuer » renvoyait
+  // simplement à l'écran de match et la partie ne pouvait plus avancer d'un jour.
+  if(matchAValider()){ terminerMatchEnDirect(); return; }
   if(matchCourant){ state.ecran = "match"; render(); return; }
   if(state.phase && state.phase.etape==="terminee"){ nouvelleSaison(); return; }
   if(matchJoueurAujourdhui()){ state.ecran = "dashboard"; render(); return; }
   if(state.evenement){ render(); return; }
   tickCalendrier = setInterval(() => {
+    const avant = etatCalendrier();
     const r = passerJour();
     if(r){ state.messageMarche = r; arreterCalendrier(); }
     else if(calendrierBloque()) arreterCalendrier();
+    else { const raison = raisonArret(avant); if(raison){ state.messageMarche = {ok:true, texte:raison}; arreterCalendrier(); } }
     sauvegarder(); render();
   }, RYTHME_CALENDRIER);
   render();
@@ -3140,16 +3232,18 @@ function recetteMatch(e, adv, rang){
 function revenusStructurels(e, rang){
   const r = clamp(rang || 8, 1, 14);
   return {tv: Math.round((TV_BASE + (15 - r) * TV_RANG)*100)/100,
-          partenaires: Math.round(COEF_PARTENAIRES * Math.pow(e.reputation, EXP_PARTENAIRES) * (1 + (7 - r)*0.015) * 100)/100};
+          partenaires: Math.round(COEF_PARTENAIRES * Math.pow(e.reputation, EXP_PARTENAIRES) * (1 + (7 - r)*0.015)
+            * ((e.id === state.clubId && aTrait("gestionnaire")) ? 0.93 : 1) * 100)/100};
 }
 /** Charges annuelles : les salaires sont enfin payés. */
 function chargesAnnuelles(e){
   const cf = obtenirCentre(e);
   const structure = FRAIS_BASE + capaciteStade(e)/1000 * FRAIS_PLACE
     + e.joueurs.length * FRAIS_JOUEUR + e.reputation * FRAIS_STANDING;
+  const remise = (e.id === state.clubId && aTrait("gestionnaire")) ? 0.9 : 1;
   return {salaires: Math.round(masseSalariale(e)*100)/100,
           formation: cf.budgetInvestissement,
-          structure: Math.round(structure*100)/100};
+          structure: Math.round(structure*remise*100)/100};
 }
 /** Prime de parcours en phase finale. */
 function primePhaseFinale(clubId){
@@ -3210,7 +3304,8 @@ function controleDNACG(){
 /** Ce que le président autorise à dépenser en indemnités, borné par le cash réel. */
 function enveloppeMercato(bonus){
   const c = club();
-  return Math.max(0, Math.round(Math.min(caisse(c) * 0.5, c.budget * PART_ENVELOPPE * (bonus||1)) * 100)/100);
+  const serrage = aTrait("denicheur") ? 0.85 : 1;                        // le président se méfie de vos coups de cœur
+  return Math.max(0, Math.round(Math.min(caisse(c) * 0.5, c.budget * PART_ENVELOPPE * (bonus||1)) * serrage * 100)/100);
 }
 /** Recette d'un match à domicile, portée à la comptabilité de l'exercice. */
 function enregistrerRecette(m){
@@ -3293,7 +3388,7 @@ function render(){
   if(!enJeu){
     if(layout) layout.style.display = "none"; if(tabbar) tabbar.style.display = "none";
     menu.innerHTML = state.vue==="creation" ? renderCreation() : renderMenu();
-    if(state.vue==="creation" && state.creation && state.creation.etape===2) initCarrousel();
+    if(state.vue==="creation" && state.creation && state.creation.etape===3) initCarrousel();
     renderModal(); return;
   }
   menu.innerHTML = ""; if(layout) layout.style.display = ""; if(tabbar) tabbar.style.display = "";
@@ -3326,15 +3421,37 @@ function renderMenu(){
 function chargerApercu(){ const st = charger(); if(st && st.clubId && st.equipes) return st; return null; }
 /** Création de carrière en trois étapes : nom, club, récapitulatif. */
 function renderCreation(){
-  const cr = state.creation || (state.creation = {etape:1, nom:"", club:null});
-  const etapes = ["Manager", "Club", "Récapitulatif"].map((lib,i)=>`<span class="${cr.etape===i+1?'actif':''}">${i+1}. ${lib}</span>`).join("");
+  const cr = state.creation || (state.creation = {etape:1, prenom:"", nom:"", nationalite:"France", profil:"prod2", trait:"formateur", club:null});
+  const etapes = ["Identité", "Parcours", "Club", "Récapitulatif"]
+    .map((lib,i)=>`<span class="${cr.etape===i+1?'actif':''}">${i+1}. ${lib}</span>`).join("");
   let corps = "";
   if(cr.etape===1){
-    corps = `<div class="carte"><h2>Votre nom de manager</h2>
-      <p class="muet petit">Il apparaîtra dans le suivi de carrière et les offres des clubs.</p>
-      <input type="text" class="champ-nom" maxlength="28" placeholder="Ex. ${echapper("Jean Dupont")}" value="${echapper(cr.nom)}" data-creation="nom">
+    corps = `<div class="carte"><h2>Qui êtes-vous ?</h2>
+      <p class="muet petit">Votre nom apparaîtra dans le suivi de carrière, la presse et les offres des clubs.</p>
+      <div class="consignes" style="max-width:640px">
+        <label>Prénom<input type="text" maxlength="20" placeholder="Jean" value="${echapper(cr.prenom)}" data-creation="prenom"></label>
+        <label>Nom<input type="text" maxlength="24" placeholder="Dupont" value="${echapper(cr.nom)}" data-creation="nom"></label>
+        <label>Nationalité<select data-creation-sel="nationalite">${NATIONALITES.map(n=>`<option value="${echapper(n)}" ${cr.nationalite===n?"selected":""}>${echapper(n)}</option>`).join("")}</select></label>
+      </div>
       <div class="actions"><button class="btn" data-action="menu-retour">Retour</button><button class="btn btn-primaire" data-action="creation-suivant">Continuer</button></div></div>`;
   } else if(cr.etape===2){
+    const carteProfil = (k, pr) => `<button class="carte-club ${cr.profil===k?'sel':''}" data-action="creation-profil" data-k="${k}" style="flex-direction:column;align-items:stretch">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:.5rem">
+          <span class="nom">${pr.nom}</span><span class="badge badge-perso">réputation ${pr.reputation}</span></div>
+        <div class="det">${pr.desc}</div></button>`;
+    const carteTrait = (k, t) => `<button class="carte-club ${cr.trait===k?'sel':''}" data-action="creation-trait" data-k="${k}" style="flex-direction:column;align-items:stretch">
+        <span class="nom">${t.nom}</span>
+        <div class="det" style="color:var(--ok)">+ ${t.plus}</div>
+        <div class="det" style="color:var(--alerte)">− ${t.moins}</div></button>`;
+    corps = `<div class="carte"><h2>D'où venez-vous ?</h2>
+      <p class="muet petit">Votre parcours fixe votre réputation de départ, et donc ce que le président attendra de vous.</p>
+      <div class="grille-clubs">${Object.entries(PROFILS_MANAGER).map(([k,pr])=>carteProfil(k,pr)).join("")}</div>
+      <h2 style="margin-top:1.2rem">Votre caractère</h2>
+      <p class="muet petit">Un seul trait, avec sa force et sa faiblesse. Il vous accompagnera toute la carrière.</p>
+      <div class="grille-clubs">${Object.entries(TRAITS_MANAGER).map(([k,t])=>carteTrait(k,t)).join("")}</div>
+      <div class="actions"><button class="btn" data-action="creation-precedent">Retour</button>
+        <button class="btn btn-primaire" data-action="creation-suivant">Continuer</button></div></div>`;
+  } else if(cr.etape===3){
     const apercu = apercuClubs();
     const ordre = DB.equipes.map(e=>e.id).sort((a,b)=>apercu[b].reputation-apercu[a].reputation);
     if(!cr.club || !apercu[cr.club]) cr.club = ordre[0];               // un club est toujours mis en avant, comme dans un carrousel de jeu
@@ -3372,10 +3489,19 @@ function renderCreation(){
         <button class="btn btn-primaire" data-action="creation-suivant">Continuer</button></div></div>`;
   } else {
     const apercu = apercuClubs(); const e = apercu[cr.club];
+    const pr = PROFILS_MANAGER[cr.profil], t = TRAITS_MANAGER[cr.trait];
+    const nomComplet = `${cr.prenom} ${cr.nom}`.trim() || "Manager";
     corps = `<div class="carte"><h2>Prêt à démarrer</h2>
       <div class="menu-reprise" style="max-width:none">${ecussonSVGApercu(cr.club, e, 48)}<div class="txt"><strong>${echapper(e.nom)}</strong><br>
-        <span class="petit muet">${echapper(cr.nom||"Manager")} · ${e.ville} · ${e.stade}</span></div></div>
-      <p class="petit muet">26 journées, phase finale, marché des transferts sous salary cap et règle JIFF. Bonne saison.</p>
+        <span class="petit muet">${echapper(nomComplet)} · ${echapper(cr.nationalite)} · ${e.ville} · ${e.stade}</span></div></div>
+      <div class="lignes-rapport" style="margin-top:.8rem">
+        <div><span class="lbl-slide">Parcours</span><strong>${pr.nom}</strong></div>
+        <div><span class="lbl-slide">Réputation de départ</span><strong>${pr.reputation} / 100</strong></div>
+        <div><span class="lbl-slide">Caractère</span><strong>${t.nom}</strong></div>
+      </div>
+      <p class="petit" style="margin-top:.6rem;color:var(--ok)">+ ${t.plus}</p>
+      <p class="petit" style="color:var(--alerte)">− ${t.moins}</p>
+      <p class="petit muet" style="margin-top:.6rem">26 journées, phase finale, marché des transferts sous salary cap, comptes surveillés par la DNACG. Bonne saison.</p>
       <div class="actions"><button class="btn" data-action="creation-precedent">Retour</button><button class="btn btn-primaire" data-action="creation-lancer">Commencer la carrière</button></div></div>`;
   }
   return `<main style="max-width:940px"><h1>Nouvelle carrière</h1><div class="etapes">${etapes}</div>${corps}</main>`;
@@ -3435,7 +3561,7 @@ function initCarrousel(){
   piste.addEventListener("scroll", ()=>{ clearTimeout(t); t = setTimeout(()=>{
     // La piste détachée par un nouveau rendu continue d'émettre des événements : ses
     // dimensions valent alors zéro et la sélection retomberait sur le premier club.
-    if(!piste.isConnected || !state.creation || state.creation.etape!==2) return;
+    if(!piste.isConnected || !state.creation || state.creation.etape!==3) return;
     const centre = piste.scrollLeft + piste.clientWidth/2;
     let best = 0, dist = Infinity;
     slides.forEach((x,i)=>{ const d = Math.abs(x.offsetLeft + x.offsetWidth/2 - centre); if(d < dist){ dist = d; best = i; } });
@@ -3506,6 +3632,7 @@ function renderEntete(){
   if(!state.clubId){ h.innerHTML = `<span class="titre">Rugby Manager — Top 14</span>`; return; }
   const c = club(); const etape = state.phase ? (state.phase.etape==="terminee" ? "Saison terminée" : "Phase finale") : `Journée ${Math.min(state.journee+1, NB_JOURNEES)} / ${NB_JOURNEES}`;
   const libContinuer = tickCalendrier ? "⏸ Pause"
+    : matchAValider() ? "Valider le résultat"
     : matchCourant ? "Reprendre le match"
     : (state.phase && state.phase.etape==="terminee") ? "Nouvelle saison"
     : matchJoueurAujourdhui() ? "⚡ Jour de match"
@@ -3588,7 +3715,11 @@ function renderAgenda(){
       : `<button class="btn btn-primaire" data-action="continuer-jeu">${tickCalendrier ? "⏸ Pause" : "Continuer ▶"}</button>
          <button class="btn" data-action="avancer-match">Aller au prochain match</button>
          <button class="btn" data-action="avancer-semaine">⏩ Simuler la semaine</button>`}</div>
-    ${suivantes ? `<h3 style="margin-top:.8rem">Semaines à venir</h3>${suivantes}` : ""}</div>`;
+    ${suivantes ? `<h3 style="margin-top:.8rem">Semaines à venir</h3>${suivantes}` : ""}
+    <h3 style="margin-top:.9rem">Arrêts du calendrier</h3>
+    <p class="petit muet">« Continuer » s'interrompt toujours sur un jour de match et sur un événement à trancher. À vous de choisir les autres.</p>
+    <div class="equipe-type" style="margin-top:.4rem">${Object.entries(ARRETS).map(([k,lib])=>`<label class="ligne-et" style="cursor:pointer">
+      <input type="checkbox" data-arret="${k}" ${reglagesArrets()[k]?"checked":""}><span class="petit">${lib}</span></label>`).join("")}</div></div>`;
 }
 function renderPlanning(){
   const info = infoJour();
@@ -3683,7 +3814,16 @@ function renderDashboard(){
 
   /* ---- Affiche du moment ---- */
   let hero = "", rapport = "";
-  if(state.phase){
+  if(matchAValider()){
+    const mc = matchCourant, D = state.equipes[mc.dom.id], E = state.equipes[mc.ext.id];
+    const mien = mc.dom.id===state.clubId ? mc.dom : mc.ext, adv = mien===mc.dom ? mc.ext : mc.dom;
+    const issue = mien.score > adv.score ? "Victoire" : mien.score === adv.score ? "Match nul" : "Défaite";
+    hero = heroDuel(D, E, mc.contexte.type==="phase" ? "Phase finale" : `Journée ${state.calendrier[state.journee].numero}`,
+      `${mc.dom.score} – ${mc.ext.score}`,
+      `${issue} · le résultat doit être validé pour poursuivre`, mc.dom.id===state.clubId,
+      `<button class="btn btn-primaire" data-action="continuer">Valider le résultat</button>
+       <button class="btn" data-action="nav" data-ecran="match">Revoir le fil et les notes</button>`);
+  } else if(state.phase){
     const ph = state.phase;
     if(ph.etape==="terminee"){
       hero = heroSimple(`Saison ${state.saison} terminée`, `Champion : <strong>${nomClub(ph.champion)}</strong>`,
@@ -4231,7 +4371,7 @@ function renderCarriere(){
     <p class="petit">Confiance : <strong>${pr.confiance}/100</strong> — ${pr.confiance>=80?"totale":pr.confiance>=60?"solide":pr.confiance>=45?"correcte":pr.confiance>=26?"entamée":"au bord de la rupture"}</p>
     <div class="jauge-conf"><i style="width:${pr.confiance}%;background:${pr.confiance<=25?'var(--alerte)':pr.confiance<=45?'var(--jaune)':'var(--ok)'}"></i></div></div>` : ""}
   <div class="kpis">
-    <div class="kpi-carte"><div class="lib">Manager</div><div class="val" style="font-size:1.1rem">${echapper(m.nom)}</div><div class="sous">${m.carriere.length} saison(s) dirigée(s)</div></div>
+    <div class="kpi-carte"><div class="lib">Manager</div><div class="val" style="font-size:1.1rem">${echapper(m.nom)}</div><div class="sous">${echapper(m.nationalite||"France")} · ${m.carriere.length} saison(s) dirigée(s)</div></div>
     <div class="kpi-carte"><div class="lib">Réputation</div><div class="val">${m.reputation}</div><div class="sous">sur 100 · ${m.reputation>=85?"référence du championnat":m.reputation>=70?"manager reconnu":m.reputation>=55?"en construction":"à faire ses preuves"}</div></div>
     <div class="kpi-carte"><div class="lib">Boucliers</div><div class="val">${titres}</div><div class="sous">${m.carriere.filter(x=>x.finaliste&&!x.titre).length} finale(s) perdue(s)</div></div>
     <div class="kpi-carte"><div class="lib">Saison en cours</div><div class="val">${rang}<span class="petit muet">e</span></div><div class="sous">club attendu ${rangAttendu(c.id)}e</div></div>
@@ -4241,6 +4381,15 @@ function renderCarriere(){
       <div class="petit muet">Le club ${o.motif}.</div></div>
       <button class="btn btn-petit btn-primaire" data-action="accepter-club" data-club="${o.clubId}">Accepter</button></div>`).join("")}
     <div class="actions"><button class="btn btn-petit" data-action="refuser-clubs">Rester à ${echapper(c.court)}</button></div></div>` : ""}
+  ${m.profil && PROFILS_MANAGER[m.profil] ? `<div class="carte"><h2>Votre profil</h2>
+    <div class="lignes-rapport">
+      <div><span class="lbl-slide">Parcours</span><strong>${PROFILS_MANAGER[m.profil].nom}</strong></div>
+      <div><span class="lbl-slide">Nationalité</span><strong>${echapper(m.nationalite||"France")}</strong></div>
+      <div><span class="lbl-slide">Caractère</span><strong>${m.trait && TRAITS_MANAGER[m.trait] ? TRAITS_MANAGER[m.trait].nom : "—"}</strong></div>
+    </div>
+    <p class="petit muet" style="margin-top:.5rem">${PROFILS_MANAGER[m.profil].desc}</p>
+    ${m.trait && TRAITS_MANAGER[m.trait] ? `<p class="petit" style="color:var(--ok);margin:.3rem 0 0">+ ${TRAITS_MANAGER[m.trait].plus}</p>
+      <p class="petit" style="color:var(--alerte);margin:.15rem 0 0">− ${TRAITS_MANAGER[m.trait].moins}</p>` : ""}</div>` : ""}
   <div class="grille grille-2">
     <div class="carte"><h2>Parcours</h2>${m.carriere.length ? m.carriere.slice().reverse().map(x=>`<div class="carriere-ligne">${ecussonSVG(x.club, 26)}
       <div><strong>Saison ${x.saison}</strong> <span class="petit muet">${echapper(state.equipes[x.club].court)}</span><div class="petit muet">${x.licencie?"❌ Licencié en cours de saison":x.titre?"🏆 Champion de France":x.finaliste?"Finaliste":x.rang<=6?"Qualifié pour la phase finale":x.rang===14?"Relégué":x.rang+"e du championnat"}</div></div>
@@ -4453,7 +4602,10 @@ document.addEventListener("click", ev => {
   const el = ev.target.closest("[data-action]"); if(!el) return; const a = el.dataset.action;
   switch(a){
     case "menu-continuer": { const st = charger(); if(st && st.clubId){ state = st; reconstruireIndex(); state.vue = "jeu"; if(state.ecran==="match") state.ecran = "dashboard"; render(); } break; }
-    case "menu-nouvelle": state.vue = "creation"; state.creation = {etape:1, nom:(state.manager&&state.manager.nom)||"", club:null}; render(); break;
+    case "menu-nouvelle": state.vue = "creation";
+      state.creation = {etape:1, prenom:(state.manager&&state.manager.prenom)||"", nom:(state.manager&&state.manager.nomFamille)||"",
+                        nationalite:(state.manager&&state.manager.nationalite)||"France", profil:"prod2", trait:"formateur", club:null};
+      render(); break;
     case "menu-retour": state.vue = "menu"; state.creation = null; if(state.clubId) sauvegarder(); render(); break;
     case "creation-club": if(slidesCarrousel()) viserClub(el.dataset.club); else { state.creation.club = el.dataset.club; render(); } break;
     case "carrousel": glisserCarrousel(+el.dataset.dir); break;
@@ -4461,13 +4613,15 @@ document.addEventListener("click", ev => {
     case "creation-hasard": { const ids = DB.equipes.map(e=>e.id); const tire = alea(ids);
       if(slidesCarrousel()) viserClub(tire); else { state.creation.club = tire; render(); } break; }
     case "creation-precedent": state.creation.etape = Math.max(1, state.creation.etape - 1); render(); break;
+    case "creation-profil": state.creation.profil = el.dataset.k; render(); break;
+    case "creation-trait": state.creation.trait = el.dataset.k; render(); break;
     case "creation-suivant": {
       const cr = state.creation;
-      if(cr.etape===1){ const champ = document.querySelector('[data-creation="nom"]'); if(champ) cr.nom = champ.value; cr.etape = 2; }
-      else if(cr.etape===2 && cr.club) cr.etape = 3;
+      if(cr.etape===1){ for(const ch of ["prenom","nom"]){ const c = document.querySelector(`[data-creation="${ch}"]`); if(c) cr[ch] = c.value; } }
+      if(cr.etape < 4 && !(cr.etape===3 && !cr.club)) cr.etape++;
       render(); break; }
     case "creation-lancer": { const cr = state.creation; if(!cr.club) break;
-      const theme = state.theme; nouvellePartie(cr.club, cr.nom); state.theme = theme; state.vue = "jeu"; state.creation = null; sauvegarder(); render(); break; }
+      const theme = state.theme; nouvellePartie(cr.club, cr); state.theme = theme; state.vue = "jeu"; state.creation = null; sauvegarder(); render(); break; }
     case "accepter-club": state.messageMarche = accepterOffreClub(el.dataset.club); sauvegarder(); render(); break;
     case "refuser-clubs": state.manager.offres = []; state.messageMarche = {ok:true, texte:"Vous restez en poste."}; sauvegarder(); render(); break;
     case "choisir-club": nouvellePartie(el.dataset.club); state.vue = "jeu"; render(); break;
@@ -4553,12 +4707,12 @@ document.addEventListener("click", ev => {
     case "reset": if(confirm("Effacer la sauvegarde et revenir au menu ?")){ effacerSauvegarde(); pauseSimulation(); matchCourant = null; state = {clubId:null, vue:"menu", theme:state.theme||"sombre"}; render(); } break;
   }
 });
-document.addEventListener("input", ev => { const el = ev.target; if(el.dataset && el.dataset.creation==="nom" && state.creation){ state.creation.nom = el.value; } if(el.dataset && el.dataset.filtre==="nom"){ state.filtreNom = el.value; } if(el.dataset && el.dataset.rech==="nom"){ state.recherche.nom = el.value; } });
+document.addEventListener("input", ev => { const el = ev.target; if(el.dataset && el.dataset.creation && state.creation){ state.creation[el.dataset.creation] = el.value; } if(el.dataset && el.dataset.filtre==="nom"){ state.filtreNom = el.value; } if(el.dataset && el.dataset.rech==="nom"){ state.recherche.nom = el.value; } });
 document.addEventListener("keydown", ev => {
   if(ev.key==="Escape" && (state.ficheJoueur||state.rapportVue)){ state.ficheJoueur = null; state.rapportVue = null; render(); }
   if(ev.key==="Enter" && ev.target.dataset && (ev.target.dataset.filtre==="nom" || ev.target.dataset.rech==="nom")){ render(); }
   // Flèches gauche/droite dans le carrousel de sélection de club
-  if((ev.key==="ArrowLeft" || ev.key==="ArrowRight") && state.vue==="creation" && state.creation && state.creation.etape===2){
+  if((ev.key==="ArrowLeft" || ev.key==="ArrowRight") && state.vue==="creation" && state.creation && state.creation.etape===3){
     if(ev.target.tagName==="INPUT" || ev.target.tagName==="TEXTAREA") return;
     ev.preventDefault(); glisserCarrousel(ev.key==="ArrowRight" ? 1 : -1);
   }
@@ -4579,6 +4733,10 @@ document.addEventListener("drop", ev => {
 });
 document.addEventListener("change", ev => {
   const el = ev.target;
+  if(el.dataset.creationSel && state.creation){ state.creation[el.dataset.creationSel] = el.value; return; }
+  if(el.dataset.arret !== undefined){
+    state.arrets = {...reglagesArrets(), [el.dataset.arret]: el.checked};
+    sauvegarder(); render(); return; }
   if(el.dataset.capitaine !== undefined){
     const p = el.value ? joueur(+el.value) : null;
     state.capitaine = (p && p.clubId === state.clubId) ? p.id : null;
