@@ -1337,12 +1337,18 @@ function commentaireAction(att, def, tac){
  * Qui aplatit sur ballon porté. Le porteur de choc désigné conclut souvent, mais pas
  * systématiquement : sans ce tirage, un seul joueur encaissait la totalité des essais
  * sur maul de son équipe et finissait meilleur marqueur du championnat.
+ * À défaut, l'essai revient en priorité au talonneur et à la troisième ligne, qui
+ * contrôlent le ballon à l'arrière du maul ; les piliers, à la poussée, concluent rarement.
  */
 const PART_PILONNEUR = 0.45;                                   // part des essais sur maul revenant au porteur de choc
+const POIDS_MAUL = {2:4, 6:3, 7:3, 8:3, 4:1.5, 5:1.5, 1:1, 3:1};   // poids du tirage par numéro de maillot
 function finisseurMaul(pilon, avants, att){
   const groupe = avants && avants.length ? avants : att.terrain;
   if(pilon && Math.random() < PART_PILONNEUR) return pilon;
-  return alea(groupe);
+  const poids = o => POIDS_MAUL[o.num] || 1;                   // un joueur hors pack (carton) reste possible, sans priorité
+  let r = Math.random() * groupe.reduce((s,o)=>s+poids(o), 0);
+  for(const o of groupe){ r -= poids(o); if(r < 0) return o; }
+  return groupe[groupe.length-1];
 }
 function marquerEssai(m, att, o, detail){
   const p = joueur(o.pid); att.score += 5; att.essais++; m.marqueurs[p.id] = (m.marqueurs[p.id]||0)+1;
