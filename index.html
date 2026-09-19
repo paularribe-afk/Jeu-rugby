@@ -540,6 +540,93 @@ textarea.export{width:100%;min-height:220px;font:.78rem/1.35 ui-monospace,SFMono
 .points .pt.on{background:var(--club);width:1.1rem;border-radius:3px}
 .bandeau-choix{display:flex;align-items:center;justify-content:center;gap:.6rem;flex-wrap:wrap;
   font-size:.82rem;color:var(--texte-2);margin-top:.5rem;text-align:center}
+
+/* ---- Hub de carrière : fond généré aux couleurs du club, tuiles cliquables ---- */
+body.fond-hub{
+  background:
+    repeating-linear-gradient(105deg, rgba(255,255,255,.016) 0 58px, transparent 58px 116px),
+    radial-gradient(86% 58% at 12% -12%, color-mix(in srgb,var(--club) 72%, transparent), transparent 66%),
+    radial-gradient(64% 46% at 92% -4%, color-mix(in srgb,var(--club) 38%, transparent), transparent 70%),
+    radial-gradient(120% 62% at 50% 120%, color-mix(in srgb,var(--club) 26%, transparent), transparent 64%),
+    linear-gradient(180deg, #0b1220 0%, var(--fond) 42%, #04060b 100%);
+  background-attachment:fixed;
+}
+:root[data-theme="clair"] body.fond-hub{
+  background:
+    radial-gradient(78% 52% at 14% -10%, color-mix(in srgb,var(--club) 30%, transparent), transparent 70%),
+    radial-gradient(58% 42% at 90% 2%,  color-mix(in srgb,var(--club) 14%, transparent), transparent 74%),
+    linear-gradient(180deg, #ffffff 0%, var(--fond) 55%, var(--fond-2) 100%);
+  background-attachment:fixed;
+}
+body.fond-hub .layout::before{                       /* halo de projecteurs, dérive très lente */
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(42% 30% at 22% 12%, rgba(255,255,255,.07), transparent 66%),
+             radial-gradient(34% 26% at 78% 6%,  rgba(255,255,255,.05), transparent 68%);
+  animation:derive 28s ease-in-out infinite alternate;
+}
+@keyframes derive{from{transform:translate3d(-1.2%,-.8%,0) scale(1)}to{transform:translate3d(1.6%,1.2%,0) scale(1.05)}}
+body.fond-hub header, body.fond-hub .sidebar{background:color-mix(in srgb,var(--fond) 72%, transparent);backdrop-filter:blur(14px)}
+body.fond-hub .contenu{position:relative;z-index:1}   /* ne pas toucher à .sidebar : sa position pilote le repli mobile */
+
+.hub{display:grid;grid-template-columns:minmax(0,1.24fr) minmax(0,.86fr);gap:.8rem 1rem;align-items:start;
+  grid-template-areas:"tete stats" "affiche stats" "cta actus" "detail detail"}
+.hub-tete{grid-area:tete;min-width:0} .hub-affiche{grid-area:affiche;min-width:0}
+.hub-cta{grid-area:cta;min-width:0}   .hub-stats{grid-area:stats;min-width:0}
+.hub-actus{grid-area:actus;min-width:0} .hub-detail{grid-area:detail;min-width:0}
+.hub-affiche .hero-match{margin-bottom:0}
+
+.hub-date{padding:.1rem .1rem .2rem}
+.hub-date .jour{display:block;font-size:1.75rem;font-weight:900;letter-spacing:-.025em;line-height:1.05;
+  text-transform:uppercase;color:var(--texte);text-shadow:0 2px 18px rgba(0,0,0,.35)}
+.hub-date .sous{display:block;margin-top:.22rem;font-size:.82rem;font-weight:600;color:var(--texte-2)}
+
+.hub-continuer{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+.hub-go{display:inline-flex;align-items:center;gap:.6rem;border:0;cursor:pointer;
+  padding:.78rem 1.5rem;border-radius:999px;font-size:1rem;font-weight:900;letter-spacing:.01em;
+  color:var(--club-texte);background:linear-gradient(135deg,var(--club),color-mix(in srgb,var(--club) 62%,#fff));
+  box-shadow:0 8px 26px color-mix(in srgb,var(--club) 34%,transparent), inset 0 1px 0 rgba(255,255,255,.35);
+  transition:transform .14s cubic-bezier(.2,.9,.3,1.2), box-shadow .14s, filter .14s}
+.hub-go:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 12px 34px color-mix(in srgb,var(--club) 44%,transparent)}
+.hub-go:active:not(:disabled){transform:translateY(0) scale(.985)}
+.hub-go:disabled{opacity:.45;cursor:default;box-shadow:none}
+
+/* Tuiles : le cœur du hub, tout est cliquable */
+.hub-tuiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}
+.tuile{position:relative;overflow:hidden;text-align:left;cursor:pointer;min-width:0;
+  background:color-mix(in srgb,var(--surface) 78%, transparent);background-image:var(--verre);
+  border:1px solid var(--ligne);border-radius:var(--rayon);padding:.7rem .8rem;color:var(--texte);
+  backdrop-filter:blur(10px);box-shadow:var(--ombre-s);
+  transition:transform .16s cubic-bezier(.2,.9,.3,1.2), border-color .16s, box-shadow .16s}
+.tuile:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--club) 55%,var(--ligne));box-shadow:var(--ombre)}
+.tuile:active{transform:translateY(-1px) scale(.99)}
+.tuile::after{content:"";position:absolute;right:-28%;top:-60%;width:78%;height:180%;
+  background:radial-gradient(closest-side,color-mix(in srgb,var(--club) 26%,transparent),transparent);opacity:.65;pointer-events:none}
+.tuile .ic{position:absolute;top:.6rem;right:.7rem;font-size:1rem;opacity:.55}
+.tuile .lib{font-size:.63rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--texte-2)}
+.tuile .val{font-size:1.5rem;font-weight:900;letter-spacing:-.02em;line-height:1.1;margin-top:.15rem}
+.tuile .val .u{font-size:.6em;font-weight:700;color:var(--texte-2)}
+.tuile .sous{font-size:.7rem;color:var(--texte-2);margin-top:.1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tuile.large{grid-column:1 / -1}
+.tuile .forme-serie{margin-top:.2rem}
+
+/* Fil d'actualités cliquable */
+.hub-fil{display:flex;flex-direction:column;gap:.35rem}
+.fil-item{display:flex;align-items:center;gap:.65rem;text-align:left;cursor:pointer;width:100%;
+  background:color-mix(in srgb,var(--surface) 62%, transparent);border:1px solid var(--ligne);
+  border-left:3px solid var(--club);border-radius:10px;padding:.5rem .7rem;color:var(--texte);
+  font-size:.82rem;backdrop-filter:blur(8px);transition:background .15s,transform .15s,border-color .15s}
+.fil-item:hover{background:color-mix(in srgb,var(--surface) 92%, transparent);transform:translateX(3px)}
+.fil-item .ic{flex:0 0 auto;font-size:1rem;opacity:.85}
+.fil-item .txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fil-item.ok{border-left-color:var(--ok)} .fil-item.erreur{border-left-color:var(--alerte)}
+
+/* Barre d'actions contextuelles, en bas du hub */
+.hub-barre{display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.9rem;padding-top:.75rem;border-top:1px solid var(--ligne)}
+.hub-barre .btn{background:color-mix(in srgb,var(--surface) 62%, transparent);backdrop-filter:blur(8px)}
+
+.hub .carte{background:color-mix(in srgb,var(--surface) 80%, transparent);backdrop-filter:blur(12px)}
+.hub .onglets{background:color-mix(in srgb,var(--surface) 55%, transparent);backdrop-filter:blur(8px);border-radius:12px}
+
 @media (max-width:860px){
   .fleche{display:none}
   .piste{padding:1.1rem 0 1.3rem}
@@ -576,6 +663,22 @@ textarea.export{width:100%;min-height:220px;font:.78rem/1.35 ui-monospace,SFMono
   header .titre{font-size:.9rem}
   .kpis{grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:.55rem}
   .kpi-carte{padding:.6rem .7rem}
+
+  .hub{display:flex;flex-direction:column;align-items:stretch;gap:.7rem}   /* stretch, sinon les tuiles élargissent la page */
+  .hub-date .jour{font-size:1.28rem}
+  .hub-date .sous{font-size:.76rem}
+  .hub-go{width:100%;justify-content:center;padding:.85rem 1rem;font-size:1.02rem}
+  /* Les tuiles défilent horizontalement plutôt que de s'empiler sur quatre rangées */
+  .hub-tuiles{display:flex;gap:.5rem;overflow-x:auto;scroll-snap-type:x mandatory;
+    padding-bottom:.2rem;scrollbar-width:none}
+  .hub-tuiles::-webkit-scrollbar{display:none}
+  .hub-tuiles .tuile{flex:0 0 52%;scroll-snap-align:start}
+  .hub-tuiles .tuile.large{flex:0 0 84%}
+  .hub-barre{gap:.35rem;overflow-x:auto;flex-wrap:nowrap;margin-top:.7rem;padding-top:.7rem;scrollbar-width:none}
+  .hub-barre::-webkit-scrollbar{display:none}
+  .hub-barre .btn{flex:0 0 auto;white-space:nowrap}
+  body.fond-hub header{background:color-mix(in srgb,var(--fond) 82%, transparent)}
+
   .kpi-carte .sous{font-size:.68rem}
   .hero-duel{gap:.5rem;margin:.75rem 0 .6rem}
   .hero-eq .nom-eq{font-size:.82rem}
@@ -3642,11 +3745,13 @@ function render(){
   const menu = document.getElementById("menu"), layout = document.getElementById("layout"), tabbar = document.getElementById("tabbar");
   if(!enJeu){
     if(layout) layout.style.display = "none"; if(tabbar) tabbar.style.display = "none";
+    document.body.classList.remove("fond-hub");
     menu.innerHTML = state.vue==="creation" ? renderCreation() : renderMenu();
     if(state.vue==="creation" && state.creation && state.creation.etape===3) initCarrousel();
     renderModal(); return;
   }
   menu.innerHTML = ""; if(layout) layout.style.display = ""; if(tabbar) tabbar.style.display = "";
+  document.body.classList.toggle("fond-hub", state.ecran === "dashboard" && !state.licencie);
   renderSidebar(); renderEntete();
   document.getElementById("app").innerHTML = renderEcran();
   renderModal();
@@ -4132,15 +4237,6 @@ function renderDashboard(){
     }
   }
 
-  /* ---- Indicateurs : les trois premiers comptent au quotidien, les deux suivants sont repliés sur mobile ---- */
-  const kpis = `<div class="kpis">
-    <div class="kpi-carte">${anneau((15-rang)/14*100, rang<=6?"var(--ok)":rang>=13?"var(--alerte)":"var(--jaune)")}<div class="lib">Classement</div><div class="val">${rang}<span class="petit muet">e</span></div><div class="sous">${cl[rang-1]?cl[rang-1].pts:0} pts · ${cl[rang-1]?cl[rang-1].j:0} matchs</div></div>
-    <div class="kpi-carte"><div class="lib">Forme</div><div class="val forme-serie">${forme.length?forme.map(x=>`<span class="${x}">${x}</span>`).join(""):'<span class="petit muet">—</span>'}</div><div class="sous">5 derniers matchs</div></div>
-    ${state.president ? `<div class="kpi-carte">${anneau(state.president.confiance, state.president.confiance<=25?"var(--alerte)":state.president.confiance<=45?"var(--jaune)":"var(--ok)")}<div class="lib">Confiance</div><div class="val" style="color:${state.president.confiance<=25?'var(--alerte)':state.president.confiance>=70?'var(--ok)':'inherit'}">${state.president.confiance}</div><div class="sous">${echapper(state.president.libelle)}</div></div>` : ""}
-    <div class="kpi-carte kpi-secondaire">${anneau(ms/plafondLNR(c)*100, ms>masseCible()?"var(--alerte)":"var(--club)")}<div class="lib">Masse salariale</div><div class="val" style="color:${ms>masseCible()?'var(--alerte)':'inherit'}">${ms.toFixed(2)}</div><div class="sous">plafond LNR ${plafondLNR(c).toFixed(2)} · cible ${masseCible().toFixed(2)} M€</div></div>
-    <div class="kpi-carte kpi-secondaire">${anneau(moyJ===null?0:moyJ/23*100, moyJ!==null&&moyJ<MIN_JIFF?"var(--alerte)":"var(--ok)")}<div class="lib">Moyenne JIFF</div><div class="val" style="color:${moyJ!==null&&moyJ<MIN_JIFF?'var(--alerte)':'inherit'}">${moyJ===null?"—":moyJ.toFixed(2)}</div><div class="sous">objectif ${MIN_JIFF} · non-JIFF ${nonJiff(c)}/${NON_JIFF_MAX}</div></div>
-  </div>`;
-
   /* ---- Le reste passe en onglets : un seul bloc à l'écran à la fois ---- */
   const nbActus = state.actualites.length;
   const onglets = [["agenda","Agenda"],["actus",`Actualités${nbActus?" ("+nbActus+")":""}`],["championnat","Championnat"]]
@@ -4171,7 +4267,67 @@ function renderDashboard(){
       ${derniere ? `<div class="carte"><h2>Résultats — journée ${derniere.numero}</h2>${renderResultatsJournee(derniere)}</div>` : ""}`;
   }
 
-  return `${hero}${rapport}${kpis}<div class="onglets">${onglets}</div>${contenu}`;
+  /* ---- Le hub : fond, date, affiche, gros bouton, tuiles cliquables ---- */
+  const libContinuer = tickCalendrier ? "Pause"
+    : matchAValider() ? "Valider le résultat"
+    : matchCourant ? "Reprendre le match"
+    : (state.phase && state.phase.etape==="terminee") ? `Lancer la saison ${state.saison+1}`
+    : matchJoueurAujourdhui() ? "Jour de match"
+    : "Continuer";
+  const dj = infoJour(); const prochain = prochaineEcheance();
+  const tete = `<div class="hub-tete"><div class="hub-date">
+      <span class="jour">${formatDate(state.date)}</span>
+      <span class="sous">${prochain} · ${TYPES_SEMAINE[dj.semaine.type].nom}${state.phase?"":` · journée ${Math.min(state.journee+1, NB_JOURNEES)} sur ${NB_JOURNEES}`}</span>
+    </div></div>`;
+  const cta = `<div class="hub-cta"><div class="hub-continuer">
+      <button class="hub-go" data-action="continuer-jeu">${tickCalendrier?"⏸":"▶"} ${libContinuer}</button>
+      <span class="petit muet">${tickCalendrier ? "Le calendrier défile — appuyez pour reprendre la main." : "Le calendrier s'arrête sur chaque moment que vous avez coché dans l'agenda."}</span>
+    </div></div>`;
+
+  const tuile = (ecran, lib, val, sous, ic, couleur) =>
+    `<button class="tuile" data-action="nav" data-ecran="${ecran}"${couleur?` style="--club:${couleur}"`:""}>
+       <span class="ic">${ic}</span><div class="lib">${lib}</div><div class="val">${val}</div><div class="sous">${sous}</div></button>`;
+  const tuiles = `<div class="hub-stats"><div class="hub-tuiles">
+    ${tuile("calendrier", "Classement", `${rang}<span class="u">e</span>`, `${cl[rang-1]?cl[rang-1].pts:0} pts · ${cl[rang-1]?cl[rang-1].j:0} matchs`, "🏆")}
+    ${tuile("stats", "Forme", forme.length?`<span class="forme-serie">${forme.map(x=>`<span class="${x}">${x}</span>`).join("")}</span>`:'<span class="u">—</span>', "5 derniers matchs", "📈")}
+    ${state.president ? tuile("carriere", "Confiance", `${state.president.confiance}<span class="u">/100</span>`, echapper(state.president.libelle), "🎩",
+        state.president.confiance<=25?"#ff5a4d":state.president.confiance<=45?"#ffd23f":"") : ""}
+    ${tuile("finances", "Trésorerie", `${caisse(c).toFixed(1)}<span class="u"> M€</span>`, `résultat projeté ${exerciceEnCours().resultat>=0?"+":"−"}${Math.abs(exerciceEnCours().resultat).toFixed(2)} M€`, "💰", caisse(c)<0?"#ff5a4d":"")}
+    ${tuile("marche", "Masse salariale", `${ms.toFixed(2)}<span class="u"> M€</span>`, `plafond LNR ${plafondLNR(c).toFixed(2)} · marge ${margeSalariale().toFixed(2)}`, "📝", ms>masseCible()?"#ffd23f":"")}
+    ${tuile("effectif", "Effectif", `${c.joueurs.length}<span class="u"> joueurs</span>`, `${internationaux(c)} international${internationaux(c)>1?"aux":""} · JIFF ${moyJ===null?"—":moyJ.toFixed(1)}/${MIN_JIFF}`, "👥", (moyJ!==null&&moyJ<MIN_JIFF)?"#ff5a4d":"")}
+  </div></div>`;
+
+  const ICO_ACTU = {ok:"✅", erreur:"⚠️", info:"📰"};
+  const actus = state.actualites.slice(0, 5);
+  const fil = `<div class="hub-actus"><div class="hub-fil">
+    ${actus.length ? actus.map(a=>`<button class="fil-item ${a.type||"info"}" data-action="onglet-dash" data-o="actus" title="${echapper(a.texte)}">
+        <span class="ic">${ICO_ACTU[a.type]||"📰"}</span><span class="txt">${echapper(a.texte)}</span></button>`).join("")
+      : `<div class="fil-item"><span class="ic">📰</span><span class="txt muet">Rien à signaler pour l'instant.</span></div>`}
+    ${nbActus>5 ? `<button class="fil-item" data-action="onglet-dash" data-o="actus"><span class="ic">＋</span><span class="txt">Voir les ${nbActus} actualités</span></button>` : ""}
+  </div></div>`;
+
+  const lien = (ecran, lib, badge) => `<button class="btn btn-petit" data-action="nav" data-ecran="${ecran}">${lib}${badge?` <span class="badge badge-liste">${badge}</span>`:""}</button>`;
+  const barre = `<div class="hub-barre">
+    ${lien("effectif", "Feuille de match")}${lien("tactique", "Tactique")}
+    ${lien("marche", "Marché", (state.offresRecues||[]).length)}${lien("formation", "Centre de formation")}
+    ${lien("finances", "Finances")}${lien("calendrier", "Calendrier")}${lien("stats", "Statistiques")}${lien("carriere", "Carrière")}
+  </div>`;
+
+  return `<div class="hub">${tete}
+    <div class="hub-affiche">${hero}</div>${cta}${tuiles}${fil}
+    <div class="hub-detail">${rapport}<div class="onglets">${onglets}</div>${contenu}</div>
+  </div>${barre}`;
+}
+/** Phrase d'accroche sous la date : ce qui attend le manager. */
+function prochaineEcheance(){
+  if(matchAValider()) return "Résultat à valider";
+  if(state.phase) return state.phase.etape==="terminee" ? "Intersaison" : "Phase finale";
+  if(jourDeMatchEnAttente()) return "Coup d'envoi aujourd'hui";
+  const j = state.calendrier[state.journee];
+  const dm = j ? dateMatchJournee(j.numero) : null;
+  if(!dm) return "Saison en cours";
+  const n = joursEntre(state.date, dm);
+  return n <= 0 ? "Coup d'envoi aujourd'hui" : `Prochaine rencontre dans ${n} jour${n>1?"s":""}`;
 }
 function renderResultatsJournee(j){
   return `<div class="resultats">${j.matchs.map(mt => { const moi = mt.dom===state.clubId||mt.ext===state.clubId; const r = mt.resultat;
