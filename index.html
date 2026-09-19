@@ -1333,6 +1333,17 @@ function commentaireAction(att, def, tac){
   const texte = alea(dispo.length ? dispo : choix); att.dernierCom = texte;
   return texte;
 }
+/**
+ * Qui aplatit sur ballon porté. Le porteur de choc désigné conclut souvent, mais pas
+ * systématiquement : sans ce tirage, un seul joueur encaissait la totalité des essais
+ * sur maul de son équipe et finissait meilleur marqueur du championnat.
+ */
+const PART_PILONNEUR = 0.45;                                   // part des essais sur maul revenant au porteur de choc
+function finisseurMaul(pilon, avants, att){
+  const groupe = avants && avants.length ? avants : att.terrain;
+  if(pilon && Math.random() < PART_PILONNEUR) return pilon;
+  return alea(groupe);
+}
 function marquerEssai(m, att, o, detail){
   const p = joueur(o.pid); att.score += 5; att.essais++; m.marqueurs[p.id] = (m.marqueurs[p.id]||0)+1;
   perf(att, p.id, 12); perfCollectif(att, 1.2);
@@ -1518,7 +1529,7 @@ function jouerMinute(m){
       const pilonneur = att.spec && att.spec.pilonneur && att.terrain.find(o=>o.pid===att.spec.pilonneur);
       if(Math.random() < 0.26 + (nA.att - nDf.def)*0.028 + (pilonneur ? 0.06 : 0)){
         const avants = att.terrain.filter(o=>o.num<=8);
-        marquerEssai(m, att, pilonneur || alea(avants.length?avants:att.terrain), "sur maul pénétrant");
+        marquerEssai(m, att, finisseurMaul(pilonneur, avants, att), "sur maul pénétrant");
       } else {
         const perdu = Math.random() < 0.55;
         ajouterFeed(m, `Maul repoussé par ${def.nom}, la défense tient${perdu?` et récupère le ballon`:``}.`, "action");
@@ -1575,7 +1586,7 @@ function jouerMinute(m){
       if(scT==="maul"){
         const chanceMaul = (dist<=22 ? 0.2 : 0.07) + (pilon ? 0.05 : 0);
         avancer(m, att, 4 + Math.round(Math.random()*6));
-        if(Math.random() < chanceMaul){ const av = att.terrain.filter(o=>o.num<=8); marquerEssai(m, att, pilon || alea(av.length?av:att.terrain), "sur ballon porté"); }
+        if(Math.random() < chanceMaul){ const av = att.terrain.filter(o=>o.num<=8); marquerEssai(m, att, finisseurMaul(pilon, av, att), "sur ballon porté"); }
         else ajouterFeed(m, `Maul pénétrant de ${att.nom} ${zone}, la défense finit par le stopper.`, "action");
       } else if(scT==="fond"){
         avancer(m, att, 8 + Math.round(Math.random()*10));
