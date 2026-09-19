@@ -681,6 +681,46 @@ const FRAIS_PLACE = 0.32;          // ...par millier de places à entretenir
 const FRAIS_JOUEUR = 0.17;          // ...par joueur sous contrat (staff, médical, matériel)
 const FRAIS_STANDING = 0.075;      // ...par point de réputation (salaires du staff, coupe d'Europe)
 const PRIMES_PHASE = {qualifie:0.8, demi:1.3, finale:2.0, titre:3.0};
+/* ---- Contrat principal de partenariat ---------------------------------
+ * Une part des recettes partenaires est renégociée à chaque intersaison. Le choix porte sur le
+ * profil du contrat : base élevée et rien d'autre, ou base réduite contre des primes au résultat.
+ * La mise convertie en primes rapporte MULT_PRIME fois plus si elle tombe — donc un contrat
+ * d'ambition n'est rentable que pour un club qui joue réellement le haut du tableau.
+ */
+const PART_CONTRAT = 0.35;         // part des recettes partenaires couverte par le contrat principal
+const MULT_PRIME = 2.2;            // multiplicateur appliqué à la mise convertie en primes
+const PRIMES_SPONSOR = {
+  top6:      {lib:"Qualification en phase finale",        poids:0.34},
+  demi:      {lib:"Demi-finale atteinte",                 poids:0.24},
+  titre:     {lib:"Bouclier de Brennus",                  poids:0.26},
+  affluence: {lib:"Remplissage moyen au-dessus de 85 %",  poids:0.16}
+};
+const PROFILS_SPONSOR = [
+  {k:"surete", nom:"Contrat de sûreté", fixe:0.98, mise:0,
+   desc:"Le partenaire facture la garantie : un peu moins que la valeur de marché, mais rien ne dépend du classement."},
+  {k:"equilibre", nom:"Contrat équilibré", fixe:0.90, mise:0.18,
+   desc:"Une base légèrement rabotée, deux primes accessibles. Le contrat par défaut d'un club de milieu de tableau."},
+  {k:"ambition", nom:"Contrat d'ambition", fixe:0.62, mise:0.46,
+   desc:"Le partenaire mise avec vous. Base amputée d'un tiers, primes doublées : rentable si vous jouez le titre, cher si vous terminez 10e."}
+];
+/* ---- Infrastructures ---------------------------------------------------
+ * Deux puits de dépense durables pour la trésorerie, en plus du centre de formation.
+ */
+const EXTENSION_PLACES = 3000;     // places gagnées par tranche de travaux
+const EXTENSION_COUT = 7.0;        // coût de la première tranche (M€), majoré ensuite
+const EXTENSION_MAX = 3;           // trois tranches au maximum
+const EXTENSION_GENE = 0.72;       // capacité du stade pendant la saison de travaux
+const EXTENSION_HOSPITALITE = 0.55; // loges et séminaires : recettes partenaires par tranche livrée (M€/an)
+const MEDICAL_NIVEAUX = [
+  {nom:"Infirmerie de club",    cout:0,    charge:0,    bless:1,    guerison:1,    forme:0, declin:1,
+   desc:"Un kiné, un médecin de garde le week-end. Le strict nécessaire."},
+  {nom:"Pôle médical",          cout:4.0,  charge:0.45, bless:0.82, guerison:0.85, forme:1, declin:0.75,
+   desc:"Deux kinés à plein temps, un préparateur physique, un protocole de reprise écrit."},
+  {nom:"Centre de performance", cout:8.0,  charge:0.90, bless:0.68, guerison:0.72, forme:2, declin:0.55,
+   desc:"Cryothérapie, suivi GPS des charges d'entraînement, imagerie sur place."},
+  {nom:"Clinique du sport",     cout:14.0, charge:1.50, bless:0.55, guerison:0.60, forme:3, declin:0.40,
+   desc:"Bloc opératoire partagé avec le CHU, chirurgien attitré, rééducation intégrale au club."}
+];
 /* ---- Identité du manager ---------------------------------------------- */
 /** Parcours d'origine : fixe la réputation de départ, donc les attentes du président. */
 const PROFILS_MANAGER = {
@@ -1843,10 +1883,13 @@ function jouerMinute(m){
     if(at.type==="melee") phaseMelee(m, pour, contre); else phaseTouche(m, pour, contre);
   }
   else if((r -= pBless) < 0){                                              // BLESSURE
-    const c = alea([m.dom, m.ext]);
+    // Le pôle médical ne change pas le nombre de chocs dans le match : il change la probabilité
+    // qu'ils laissent des traces chez vous, et la durée de l'indisponibilité.
+    const poidsB = e => e.id === state.clubId ? niveauMedical().bless : 1;
+    const c = Math.random() * (poidsB(m.dom) + poidsB(m.ext)) < poidsB(m.dom) ? m.dom : m.ext;
     const fragiles = c.terrain.filter(x=>joueur(x.pid).perso==="fragile");
     const o = (fragiles.length && Math.random()<0.45) ? alea(fragiles) : alea(c.terrain);
-    const p = joueur(o.pid); const sem = 1 + Math.floor(Math.random()*6);
+    const p = joueur(o.pid); const sem = dureeBlessure(1 + Math.floor(Math.random()*6), c.id);
     // Moment-clé : coup dur sur un de vos joueurs, on sort ou on serre les dents
     const autoActif = c.id===state.clubId && c.auto && c.auto.actif;
     if(!autoActif && peutInterrompre(m, c) && sem <= 3 && c.banc.length && Math.random() < 0.8){
@@ -2104,7 +2147,12 @@ function evolutionJoueurs(finSaison){
   for(const e of Object.values(state.equipes)){ if(e.horsChampionnat) continue;
     for(const p of e.joueurs){
       const tj = p.stats.matchs; const r = Math.random();
-      const bouge = (k, d) => { const av = p.attr[k]; p.attr[k] = clamp(p.attr[k]+d, 1, 20); if(p.attr[k]!==av && e.id===state.clubId) news.push(`${p.nom} ${d>0?"+":""}${d} ${ATTRIBUTS.find(a=>a[0]===k)[1].toLowerCase()}`); };
+      const bouge = (k, d) => {
+        // Le pôle médical ne rajeunit personne, mais il freine l'usure : une partie des baisses
+        // liées à l'âge est évitée chez vos joueurs.
+        if(d < 0 && e.id===state.clubId && Math.random() >= niveauMedical().declin) return;
+        const av = p.attr[k]; p.attr[k] = clamp(p.attr[k]+d, 1, 20);
+        if(p.attr[k]!==av && e.id===state.clubId) news.push(`${p.nom} ${d>0?"+":""}${d} ${ATTRIBUTS.find(a=>a[0]===k)[1].toLowerCase()}`); };
       const peutProgresser = () => moyenne(p) < (p.potentiel || moyenne(p));
       if(finSaison){
         if(p.age<=23){ const n = tj>=12 ? 2 : tj>=5 ? 1 : (r<0.4 ? 1 : 0); for(let i=0;i<n;i++) if(peutProgresser()) bouge(alea(cles), 1); }
@@ -2149,7 +2197,7 @@ function entrainementSemaine(impose){
     // Blessures à l'entraînement
     if(p.blessure===0 && sem.axe!=="recuperation"){
       const risque = 0.006 * inte.blessure * (p.perso==="fragile" ? 2.2 : 1) * (p.forme<45 ? 1.8 : 1);
-      if(Math.random() < risque){ p.blessure = 1 + Math.floor(Math.random()*3); bobos.push(`${p.nom} (${p.blessure} sem.)`); }
+      if(Math.random() < risque * niveauMedical().bless){ p.blessure = dureeBlessure(1 + Math.floor(Math.random()*3), p.clubId); bobos.push(`${p.nom} (${p.blessure} sem.)`); }
     }
   }
   if(progres.length) actualite(`Entraînement « ${axe.nom} » : ${progres.slice(0,6).join(", ")}${progres.length>6?` et ${progres.length-6} autre(s)`:""}.`, "ok");
@@ -2365,6 +2413,10 @@ function nouvelleSaison(){
     actualite(`${manque} jeune(s) du centre de formation intègrent le groupe professionnel pour compléter l'effectif.`, "info"); }
   for(const e of Object.values(state.equipes)) if(e.id!==state.clubId && !e.horsChampionnat && e.joueurs.length<23)
     while(e.joueurs.length<23){ const po = alea(Object.keys(POSTES)); const j = creerJoueur([`Espoir ${e.court} ${e.joueurs.length+1}`, po, "", 21, 1, 10], e.id, e.joueurs.length); e.joueurs.push(j); INDEX[j.id] = j; }
+  if(infra().travaux){
+    infra().travaux = false; infra().extensions++;
+    actualite(`Travaux livrés : la nouvelle tribune porte le stade à ${(CAPACITES[c.id]+infra().extensions*EXTENSION_PLACES).toLocaleString("fr-FR")} places, dont des loges qui rapporteront ${EXTENSION_HOSPITALITE.toFixed(2)} M€ de plus par an.`, "ok");
+  }
   state.saison++; state.journee = 0; state.phase = null;
   state.date = debutSaison(state.saison); state.evenement = null;               // retour à la reprise d'août
   const ids = idsChampionnat(); state.calendrier = genererCalendrier(ids); state.classement = classementVide(ids);
@@ -2376,6 +2428,7 @@ function nouvelleSaison(){
   intersaisonCentreFormation();                                                  // centre de formation : progression, départs, nouvelle promotion
   if(partis.length) actualite(`Fins de contrat : ${partis.join(", ")} quittent le club (fins de contrat non prolongées).`, "erreur");
   actualite(`Saison ${state.saison} : le championnat reprend, budget crédité de 4 M€.`, "ok");
+  actualite(`Le contrat principal de partenariat est à renégocier : trois profils sont sur la table dans l'écran Finances.`, "info");
   nettoyerFeuille(); state.feuille = compositionAuto(state.clubId);
   if(!capitaine()) state.capitaine = capitaineAuto();
   state.ecran = "dashboard"; sauvegarder(); render();
@@ -2971,7 +3024,7 @@ function effetsDuJour(info){
   const {semaine:w, jour} = info;
   for(const e of Object.values(state.equipes)) for(const p of e.joueurs){
     p.forme = clamp(Math.round(p.forme + (GAIN_FORME_JOUR[w.type] || 4)
-      + (e.id === state.clubId && aTrait("meneur") ? 1 : 0)), 5, 100);
+      + (e.id === state.clubId ? (aTrait("meneur") ? 1 : 0) + niveauMedical().forme : 0)), 5, 100);
     if(jour===0) p.blessure = Math.max(0, p.blessure-1);                                     // les blessures se comptent en semaines
     if(jour===6 && (w.type==="off" || w.type==="treve")) p.blessure = Math.max(0, p.blessure-1); // soins renforcés hors match
   }
@@ -3105,7 +3158,7 @@ const EVENEMENTS = [
     v.forEach(p=>p.forme = Math.max(5, p.forme-20));
     return {texte:`Intoxication alimentaire après le repas d'équipe : ${v.map(p=>p.nom).join(", ")} sont à plat (forme −20).`, type:"erreur"}; }},
   {id:"padel", poids:2, creer(c){ const p = alea(disponiblesClub()); if(!p) return null;
-    p.blessure = 1 + Math.floor(Math.random()*2); nettoyerFeuille();
+    p.blessure = dureeBlessure(1 + Math.floor(Math.random()*2), p.clubId); nettoyerFeuille();
     return {texte:`${p.nom} se tord la cheville en jouant au padel pendant son jour de repos : ${p.blessure} semaine(s) d'arrêt.`, type:"erreur"}; }},
   {id:"caritatif", poids:3, creer(c){ c.joueurs.forEach(p=>ajusterMoral(p, 4));
     return {texte:`Visite du groupe au service pédiatrique de l'hôpital : les joueurs en ressortent soudés (moral +4).`, type:"ok"}; }},
@@ -3204,7 +3257,7 @@ const EVENEMENTS = [
                ["forcer","Le laisser s'entraîner","40 % de risque de blessure de 3 à 5 semaines"]]}; },
     resoudre(ev, choix, c){ const p = joueur(ev.pid); if(!p || p.clubId!==c.id) return {texte:"Sans objet."};
       if(choix==="menager"){ p.blessure = Math.max(p.blessure, 1); p.forme = Math.min(100, p.forme+15); nettoyerFeuille(); return {texte:`${p.nom} est mis au repos par précaution pour une semaine.`}; }
-      if(Math.random()<0.4){ p.blessure = 3 + Math.floor(Math.random()*3); nettoyerFeuille(); return {texte:`Le pari tourne mal : ${p.nom} se blesse à l'entraînement (${p.blessure} semaines).`, type:"erreur"}; }
+      if(Math.random()<0.4*niveauMedical().bless){ p.blessure = dureeBlessure(3 + Math.floor(Math.random()*3), p.clubId); nettoyerFeuille(); return {texte:`Le pari tourne mal : ${p.nom} se blesse à l'entraînement (${p.blessure} semaines).`, type:"erreur"}; }
       ajusterMoral(p, 2); return {texte:`${p.nom} s'entraîne normalement, la gêne disparaît.`, type:"ok"}; }},
   {id:"concert", poids:1, creer(c){
     return {titre:"Le stade convoité", texte:`La mairie propose d'accueillir un grand concert au ${c.stade} pendant la semaine, contre une redevance de 0,20 M€.`,
@@ -3245,7 +3298,100 @@ function resoudreEvenement(choix){
    indemnités de transfert et les travaux. Auparavant les deux étaient confondus,
    si bien qu'un transfert amputait définitivement le chiffre d'affaires du club.
    ===================================================================== */
-const capaciteStade = e => CAPACITES[e.id] || 15000;
+/** Infrastructures du club du joueur, initialisées à la volée pour les sauvegardes antérieures. */
+function infra(){
+  if(!state.infra) state.infra = {extensions:0, travaux:false, medical:0};
+  return state.infra;
+}
+const niveauMedical = () => MEDICAL_NIVEAUX[clamp(infra().medical, 0, MEDICAL_NIVEAUX.length-1)];
+/** Durée d'une blessure, raccourcie par le pôle médical pour les joueurs du club. */
+const dureeBlessure = (sem, clubId) => clubId === state.clubId ? Math.max(1, Math.round(sem * niveauMedical().guerison)) : sem;
+/** Coût de la prochaine tranche d'agrandissement : chaque tranche coûte plus cher que la précédente. */
+const coutExtension = () => Math.round(EXTENSION_COUT * (1 + infra().extensions*0.25) * 100)/100;
+/**
+ * Capacité du stade. Les tranches livrées s'ajoutent ; pendant la saison de travaux, une
+ * partie des tribunes est condamnée et la billetterie en souffre.
+ */
+const capaciteStade = e => {
+  let cap = CAPACITES[e.id] || 15000;
+  if(state.clubId && e.id === state.clubId && state.infra){
+    cap += (state.infra.extensions || 0) * EXTENSION_PLACES;
+    if(state.infra.travaux) cap = Math.round(cap * EXTENSION_GENE);
+  }
+  return cap;
+};
+/** Lance une tranche de travaux : payée comptant, livrée à l'intersaison suivante. */
+function lancerTravaux(){
+  const c = club(); const i = infra();
+  if(i.travaux) return {ok:false, texte:"Les travaux sont déjà en cours ; la tribune sera livrée à l'intersaison."};
+  if(i.extensions >= EXTENSION_MAX) return {ok:false, texte:`Le stade a atteint sa capacité maximale (${EXTENSION_MAX} tranches).`};
+  const cout = coutExtension();
+  if(cout > caisse(c)) return {ok:false, texte:`Trésorerie insuffisante : ${caisse(c).toFixed(2)} M€ en caisse pour ${cout.toFixed(2)} M€ de travaux.`};
+  mouvementCaisse(c, -cout); i.travaux = true;
+  actualite(`Travaux d'agrandissement lancés : ${cout.toFixed(2)} M€ engagés, ${Math.round((1-EXTENSION_GENE)*100)} % des places condamnées jusqu'à la fin de la saison.`, "info");
+  return {ok:true, texte:`Travaux lancés pour ${cout.toFixed(2)} M€. Le stade tourne à ${Math.round(EXTENSION_GENE*100)} % de sa capacité cette saison.`};
+}
+/** Monte le pôle médical d'un niveau. */
+function ameliorerMedical(){
+  const c = club(); const i = infra();
+  if(i.medical >= MEDICAL_NIVEAUX.length-1) return {ok:false, texte:"Le pôle médical est déjà au niveau maximal."};
+  const suiv = MEDICAL_NIVEAUX[i.medical+1];
+  if(suiv.cout > caisse(c)) return {ok:false, texte:`Trésorerie insuffisante : ${caisse(c).toFixed(2)} M€ en caisse pour ${suiv.cout.toFixed(2)} M€.`};
+  mouvementCaisse(c, -suiv.cout); i.medical++;
+  actualite(`Le club se dote d'un ${suiv.nom.toLowerCase()} : ${suiv.cout.toFixed(2)} M€ investis, ${suiv.charge.toFixed(2)} M€ de charges annuelles supplémentaires.`, "ok");
+  return {ok:true, texte:`${suiv.nom} opérationnel : ${Math.round((1-suiv.bless)*100)} % de blessures en moins, indisponibilités raccourcies de ${Math.round((1-suiv.guerison)*100)} %.`};
+}
+/* ---- Contrat principal de partenariat --------------------------------- */
+/** Recettes partenaires de référence : la formule d'origine, avant renégociation. */
+function referencePartenaires(e, rang){
+  const r = clamp(rang || 8, 1, 14);
+  return Math.round(COEF_PARTENAIRES * Math.pow(e.reputation, EXP_PARTENAIRES) * (1 + (7 - r)*0.015)
+    * ((e.id === state.clubId && aTrait("gestionnaire")) ? 0.93 : 1) * 100)/100;
+}
+/** Contrat en vigueur pour la saison en cours, ou null s'il reste à signer. */
+const contratSponsor = () => (state.sponsor && state.sponsor.saison === state.saison) ? state.sponsor : null;
+/**
+ * Les trois contrats proposés cette saison. La qualité des termes suit la réputation du club
+ * et son classement de la saison écoulée : on ne propose pas la même chose à Toulouse qu'à Vannes.
+ */
+function offresSponsor(){
+  const c = club(); const rang = state.dernierRang || 8;
+  const ref = referencePartenaires(c, rang);
+  const q = clamp(0.88 + (c.reputation - 62)/220 + (8 - clamp(rang,1,14))*0.012, 0.85, 1.18);
+  const socle = Math.round(ref * (1 - PART_CONTRAT) * 100)/100;
+  return PROFILS_SPONSOR.map(pr => ({
+    k:pr.k, nom:pr.nom, desc:pr.desc, socle,
+    base: Math.round(ref * PART_CONTRAT * pr.fixe * q * 100)/100,
+    primes: Object.entries(PRIMES_SPONSOR)
+      .map(([k, v]) => ({k, lib:v.lib, montant: Math.round(ref * PART_CONTRAT * pr.mise * MULT_PRIME * v.poids * q * 100)/100}))
+      .filter(x => x.montant >= 0.01)
+  }));
+}
+/** Signe l'un des trois contrats pour la saison en cours. */
+function signerSponsor(k){
+  const o = offresSponsor().find(x => x.k === k);
+  if(!o) return {ok:false, texte:"Ce contrat n'est plus sur la table."};
+  if(contratSponsor()) return {ok:false, texte:"Le contrat de la saison est déjà signé."};
+  state.sponsor = {saison:state.saison, profil:o.k, nom:o.nom, socle:o.socle, base:o.base, primes:o.primes};
+  actualite(`Contrat principal signé : ${o.nom}, ${(o.socle+o.base).toFixed(2)} M€ garantis${o.primes.length ? ` et jusqu'à ${o.primes.reduce((a,b)=>a+b.montant,0).toFixed(2)} M€ de primes` : ""}.`, "ok");
+  return {ok:true, texte:`${o.nom} signé.`};
+}
+/** Remplissage moyen des réceptions de la saison, pour la prime d'affluence. */
+function remplissageMoyen(){
+  const k = compta(); if(!k.matchs.length) return 0;
+  const cap = capaciteStade(club());
+  return k.matchs.reduce((a, m) => a + m.spectateurs/cap, 0) / k.matchs.length;
+}
+/** Primes du contrat principal effectivement déclenchées, évaluées à la clôture. */
+function primesSponsorGagnees(rang){
+  const s = contratSponsor(); if(!s || !s.primes.length) return {total:0, detail:[]};
+  const ph = state.phase, id = state.clubId;
+  const enDemi = !!(ph && (((ph.demis||[]).some(x=>x.dom===id||x.ext===id)) || (ph.qualifiesDirects||[]).includes(id)
+                   || (ph.finale && (ph.finale.dom===id||ph.finale.ext===id)) || ph.champion===id));
+  const atteint = {top6: rang>0 && rang<=6, demi:enDemi, titre: !!(ph && ph.champion===id), affluence: remplissageMoyen() >= 0.85};
+  const detail = s.primes.map(pr => ({...pr, gagnee: !!atteint[pr.k]}));
+  return {total: Math.round(detail.filter(x=>x.gagnee).reduce((a,b)=>a+b.montant,0)*100)/100, detail};
+}
 /** Trésorerie du club, initialisée à la volée pour les sauvegardes antérieures. */
 function caisse(e){
   if(e.tresorerie === undefined) e.tresorerie = Math.round(e.budget * 0.15 * 100)/100;
@@ -3285,9 +3431,12 @@ function recetteMatch(e, adv, rang){
 /** Recettes annuelles hors billetterie, fonction du standing et du classement. */
 function revenusStructurels(e, rang){
   const r = clamp(rang || 8, 1, 14);
+  const mien = e.id === state.clubId;
+  const sp = mien ? contratSponsor() : null;
+  const hospitalite = mien ? (infra().extensions || 0) * EXTENSION_HOSPITALITE : 0;
+  const partenaires = sp ? (sp.socle + sp.base + hospitalite) : (referencePartenaires(e, r) + hospitalite);
   return {tv: Math.round((TV_BASE + (15 - r) * TV_RANG)*100)/100,
-          partenaires: Math.round(COEF_PARTENAIRES * Math.pow(e.reputation, EXP_PARTENAIRES) * (1 + (7 - r)*0.015)
-            * ((e.id === state.clubId && aTrait("gestionnaire")) ? 0.93 : 1) * 100)/100};
+          partenaires: Math.round(partenaires*100)/100};
 }
 /** Charges annuelles : les salaires sont enfin payés. */
 function chargesAnnuelles(e){
@@ -3297,6 +3446,7 @@ function chargesAnnuelles(e){
   const remise = (e.id === state.clubId && aTrait("gestionnaire")) ? 0.9 : 1;
   return {salaires: Math.round(masseSalariale(e)*100)/100,
           formation: cf.budgetInvestissement,
+          medical: e.id === state.clubId ? niveauMedical().charge : 0,
           structure: Math.round(structure*remise*100)/100};
 }
 /** Prime de parcours en phase finale. */
@@ -3318,20 +3468,23 @@ function exerciceEnCours(){
   // n'aurait aucun effet visible sur la projection.
   const projection = recetteMatch(c, null, rang).recette * restants;
   const billetterie = Math.round((k.billetterie + projection)*100)/100;
-  const produits = Math.round((rs.tv + rs.partenaires + billetterie + k.primes)*100)/100;
-  const charges = Math.round((ch.salaires + ch.formation + ch.structure)*100)/100;
+  const ps = primesSponsorGagnees(rang);
+  const produits = Math.round((rs.tv + rs.partenaires + billetterie + k.primes + ps.total)*100)/100;
+  const charges = Math.round((ch.salaires + ch.formation + (ch.medical||0) + ch.structure)*100)/100;
   return {rang, ...rs, billetterie, billetterieAcquise: Math.round(k.billetterie*100)/100, joues,
-          primes:k.primes, ...ch, produits, charges, resultat: Math.round((produits - charges)*100)/100};
+          primes:k.primes, primesSponsor:ps.total, detailSponsor:ps.detail, ...ch,
+          produits, charges, resultat: Math.round((produits - charges)*100)/100};
 }
 /** Clôture de l'exercice, appelée à l'intersaison. Renvoie le compte de résultat définitif. */
 function cloturerExercice(e, rang, billetterie, primes){
   const rs = revenusStructurels(e, rang), ch = chargesAnnuelles(e);
-  const produits = Math.round((rs.tv + rs.partenaires + billetterie + primes)*100)/100;
-  const charges = Math.round((ch.salaires + ch.formation + ch.structure)*100)/100;
+  const ps = e.id === state.clubId ? primesSponsorGagnees(rang) : {total:0, detail:[]};
+  const produits = Math.round((rs.tv + rs.partenaires + billetterie + primes + ps.total)*100)/100;
+  const charges = Math.round((ch.salaires + ch.formation + (ch.medical||0) + ch.structure)*100)/100;
   const resultat = Math.round((produits - charges)*100)/100;
   mouvementCaisse(e, resultat);
   e.budget = produits;                                          // le budget devient le chiffre d'affaires réalisé
-  return {saison:state.saison, rang, ...rs, billetterie, primes, ...ch, produits, charges, resultat, tresorerie: caisse(e)};
+  return {saison:state.saison, rang, ...rs, billetterie, primes, primesSponsor:ps.total, ...ch, produits, charges, resultat, tresorerie: caisse(e)};
 }
 /** Exercice d'un club dirigé par l'ordinateur : billetterie estimée sur treize réceptions. */
 function cloturerExerciceIA(e, rang){
@@ -3371,7 +3524,14 @@ function enregistrerRecette(m){
 /** Clôture des comptes de tous les clubs, puis contrôle de la DNACG pour le vôtre. */
 function cloturerExercices(){
   const cl = classementTrie(), c = club(), k = compta();
-  const ex = cloturerExercice(c, cl.findIndex(l=>l.id===c.id)+1, Math.round(k.billetterie*100)/100, primePhaseFinale(c.id));
+  const rangFinal = cl.findIndex(l=>l.id===c.id)+1;
+  const ps = primesSponsorGagnees(rangFinal);
+  const ex = cloturerExercice(c, rangFinal, Math.round(k.billetterie*100)/100, primePhaseFinale(c.id));
+  state.dernierRang = rangFinal;
+  if(ps.detail.length){
+    const gagnees = ps.detail.filter(x=>x.gagnee), perdues = ps.detail.filter(x=>!x.gagnee);
+    actualite(`Contrat principal : ${gagnees.length ? `${gagnees.map(x=>x.lib.toLowerCase()).join(", ")} — ${ps.total.toFixed(2)} M€ de primes encaissés` : "aucune prime déclenchée"}${perdues.length ? `, ${perdues.reduce((a,b)=>a+b.montant,0).toFixed(2)} M€ laissés sur la table` : ""}.`, ps.total>0?"ok":"erreur");
+  }
   k.exercices.push(ex); if(k.exercices.length > 8) k.exercices.shift();
   for(const e of Object.values(state.equipes)) if(!e.horsChampionnat && e.id !== c.id)
     cloturerExerciceIA(e, cl.findIndex(l=>l.id===e.id)+1);
@@ -3701,7 +3861,7 @@ function renderEntete(){
     <span class="meta">
       <span class="bloc-meta meta-saison"><span class="lbl">Saison</span><span class="vl">${etape}</span></span>
       <span class="bloc-meta"><span class="lbl">${TYPES_SEMAINE[infoJour().semaine.type].nom}</span><span class="vl" style="text-transform:capitalize">${formatDate(state.date, true)}</span></span>
-      <span class="bloc-meta meta-secondaire"><span class="lbl">Salary cap</span><span class="vl">${ms.toFixed(2)} <span class="muet petit">/ ${SALARY_CAP}</span></span>
+      <span class="bloc-meta meta-secondaire"><span class="lbl">Salary cap</span><span class="vl">${masseCap(c).toFixed(2)} <span class="muet petit">/ ${SALARY_CAP}</span></span>
         <span class="jauge-fine"><i style="width:${partCap}%;background:${couleurCap};box-shadow:0 0 8px ${couleurCap}"></i></span></span>
       <span class="bloc-meta meta-secondaire"><span class="lbl">Enveloppe</span><span class="vl">${env.toFixed(2)} M€</span>
         <span class="jauge-fine"><i style="width:${partEnv}%;background:var(--club);box-shadow:0 0 8px var(--club)"></i></span></span>
@@ -4276,6 +4436,75 @@ function renderMarche(){
 }
 
 /* ---- Finances ---------------------------------------------------------- */
+/** Carte du contrat principal : les trois offres tant qu'il n'est pas signé, son suivi ensuite. */
+function carteSponsor(ex){
+  const sp = contratSponsor();
+  if(!sp){
+    const offres = offresSponsor();
+    return `<div class="carte"><h2>Contrat principal de partenariat</h2>
+      <p class="petit muet">Le partenaire maillot renégocie chaque année. Vous arbitrez entre garanti et conditionnel : la part que vous renoncez à toucher d'avance revient multipliée par ${MULT_PRIME} si les primes tombent. Les termes proposés tiennent à votre réputation et à votre ${state.dernierRang ? `${state.dernierRang}e place` : "classement"} de la saison écoulée.</p>
+      <div class="grille grille-3" style="margin-top:.6rem">${offres.map(o => `
+        <div class="carte-choix">
+          <h3>${o.nom}</h3>
+          <p class="val" style="font-size:1.4rem;font-weight:800">${(o.socle+o.base).toFixed(2)} <span class="petit muet">M€ garantis</span></p>
+          <p class="petit muet">${o.desc}</p>
+          ${o.primes.length ? `<ul class="petit" style="margin:.4rem 0 .5rem .9rem">${o.primes.map(x=>`<li>${x.lib} : <strong>+${x.montant.toFixed(2)} M€</strong></li>`).join("")}</ul>
+            <p class="petit"><strong>Jusqu'à ${(o.socle+o.base+o.primes.reduce((a,b)=>a+b.montant,0)).toFixed(2)} M€</strong> au total.</p>`
+            : `<p class="petit muet" style="margin:.4rem 0 .5rem">Aucune prime : ce que vous voyez est ce que vous touchez.</p>`}
+          <button class="btn btn-primaire btn-petit" data-action="signer-sponsor" data-k="${o.k}">Signer</button>
+        </div>`).join("")}</div></div>`;
+  }
+  const detail = ex.detailSponsor || [];
+  const acquis = detail.filter(x=>x.gagnee).reduce((a,b)=>a+b.montant,0);
+  const reste = detail.filter(x=>!x.gagnee).reduce((a,b)=>a+b.montant,0);
+  return `<div class="carte"><h2>Contrat principal — ${sp.nom}</h2>
+    <div class="lignes-rapport">
+      <div><span class="lbl-slide">Garanti</span><strong>${(sp.socle+sp.base).toFixed(2)} M€</strong></div>
+      <div><span class="lbl-slide">Primes déjà acquises</span><strong style="color:var(--ok)">${acquis.toFixed(2)} M€</strong></div>
+      <div><span class="lbl-slide">Primes encore en jeu</span><strong>${reste.toFixed(2)} M€</strong></div>
+    </div>
+    ${detail.length ? `<table class="tbl" style="margin-top:.6rem"><tbody>${detail.map(x=>`<tr><td>${x.gagnee?"✅":"⬜"} ${x.lib}</td><td class="num${x.gagnee?" moy":" muet"}">+${x.montant.toFixed(2)} M€</td></tr>`).join("")}</tbody></table>
+      <p class="petit muet" style="margin-top:.5rem">Les primes sont arrêtées à la clôture, phase finale comprise. Le remplissage moyen est actuellement de ${(remplissageMoyen()*100).toFixed(0)} %.</p>`
+    : `<p class="petit muet" style="margin-top:.5rem">Contrat sans primes : rien ne dépend du classement cette saison.</p>`}
+    <p class="petit muet">Renégociable à la prochaine intersaison.</p></div>`;
+}
+/** Carte des infrastructures : agrandissement du stade et pôle médical. */
+function carteInfrastructures(){
+  const c = club(); const i = infra(); const med = niveauMedical();
+  const suiv = MEDICAL_NIVEAUX[i.medical+1];
+  const capBase = CAPACITES[c.id] || 15000;
+  const cout = coutExtension();
+  const gainAnnuel = EXTENSION_PLACES * 0.7 * prixPlace() * 13 / 1e6 + EXTENSION_HOSPITALITE;
+  return `<div class="carte"><h2>Infrastructures</h2>
+  <div class="grille grille-2">
+    <div>
+      <h3>${echapper(c.stade)}</h3>
+      <div class="lignes-rapport">
+        <div><span class="lbl-slide">Capacité actuelle</span><strong>${capaciteStade(c).toLocaleString("fr-FR")} places</strong></div>
+        <div><span class="lbl-slide">Tranches livrées</span><strong>${i.extensions} / ${EXTENSION_MAX}</strong></div>
+        ${i.travaux ? `<div><span class="lbl-slide">Travaux</span><strong style="color:var(--jaune)">en cours, ${Math.round((1-EXTENSION_GENE)*100)} % des places condamnées</strong></div>` : ""}
+      </div>
+      ${i.travaux ? `<p class="petit muet" style="margin-top:.5rem">La tribune sera livrée à l'intersaison. D'ici là le stade tourne au ralenti et la billetterie en pâtit.</p>`
+        : i.extensions >= EXTENSION_MAX ? `<p class="petit muet" style="margin-top:.5rem">Le stade a atteint sa capacité maximale.</p>`
+        : `<p class="petit muet" style="margin-top:.5rem">Une tranche ajoute ${EXTENSION_PLACES.toLocaleString("fr-FR")} places et des loges. Rapport estimé : <strong>${gainAnnuel.toFixed(2)} M€ par an</strong> au tarif actuel, soit un retour sur investissement en ${Math.ceil(cout/Math.max(0.01,gainAnnuel))} saisons — plus la saison de travaux à capacité réduite.</p>
+          <button class="btn btn-primaire btn-petit" data-action="lancer-travaux" ${cout>caisse(c)?"disabled":""}>Lancer les travaux — ${cout.toFixed(2)} M€</button>
+          ${cout>caisse(c)?`<p class="petit" style="color:var(--alerte)">Trésorerie insuffisante (${caisse(c).toFixed(2)} M€).</p>`:""}`}
+    </div>
+    <div>
+      <h3>Pôle médical — ${med.nom}</h3>
+      <p class="petit muet">${med.desc}</p>
+      <div class="lignes-rapport">
+        <div><span class="lbl-slide">Risque de blessure</span><strong>${med.bless===1?"référence":`−${Math.round((1-med.bless)*100)} %`}</strong></div>
+        <div><span class="lbl-slide">Durée d'indisponibilité</span><strong>${med.guerison===1?"référence":`−${Math.round((1-med.guerison)*100)} %`}</strong></div>
+        <div><span class="lbl-slide">Charges annuelles</span><strong>${med.charge.toFixed(2)} M€</strong></div>
+      </div>
+      ${suiv ? `<p class="petit muet" style="margin-top:.5rem"><strong>${suiv.nom}</strong> — ${suiv.desc} Blessures −${Math.round((1-suiv.bless)*100)} %, durées −${Math.round((1-suiv.guerison)*100)} %, ${suiv.charge.toFixed(2)} M€ de charges annuelles.</p>
+        <button class="btn btn-primaire btn-petit" data-action="niveau-medical" ${suiv.cout>caisse(c)?"disabled":""}>Investir ${suiv.cout.toFixed(2)} M€</button>
+        ${suiv.cout>caisse(c)?`<p class="petit" style="color:var(--alerte)">Trésorerie insuffisante (${caisse(c).toFixed(2)} M€).</p>`:""}`
+      : `<p class="petit muet" style="margin-top:.5rem">Niveau maximal atteint.</p>`}
+    </div>
+  </div></div>`;
+}
 function renderFinances(){
   const c = club(), k = compta(), ex = exerciceEnCours(), t = caisse(c);
   const cap = capaciteStade(c), prix = prixPlace();
@@ -4286,7 +4515,9 @@ function renderFinances(){
     : t < DNACG.recrutementBloque ? ["var(--alerte)","Recrutement menacé"]
     : t < DNACG.avertissement ? ["var(--jaune)","Sous surveillance"]
     : t < 3 ? ["var(--jaune)","Marge étroite"] : ["var(--ok)","Comptes sains"];
-  return `<h1>Finances</h1>
+  const msg = state.messageFinances ? `<div class="message ${state.messageFinances.ok?"ok":"erreur"}">${state.messageFinances.texte}</div>` : "";
+  state.messageFinances = null;
+  return `<h1>Finances</h1>${msg}
   <div class="kpis">
     <div class="kpi-carte">${anneau(clamp(t/15*100,0,100), etatDnacg[0])}<div class="lib">Trésorerie</div>
       <div class="val" style="color:${t<0?'var(--alerte)':'inherit'}">${t.toFixed(2)}<span class="petit muet"> M€</span></div>
@@ -4308,11 +4539,13 @@ function renderFinances(){
         ${ligne("Droits télévisés", ex.tv)}
         ${ligne("Partenaires et merchandising", ex.partenaires)}
         ${ligne(`Billetterie <span class="petit muet">(${ex.billetterieAcquise.toFixed(2)} acquis)</span>`, ex.billetterie)}
+        ${ex.primesSponsor ? ligne("Primes du contrat principal", ex.primesSponsor) : ""}
         ${ex.primes ? ligne("Primes de phase finale", ex.primes) : ""}
         ${ligne("<strong>Total des produits</strong>", ex.produits, true)}
         <tr><td colspan="2" style="height:.4rem"></td></tr>
         ${ligne("Masse salariale", -ex.salaires)}
         ${ligne("Centre de formation", -ex.formation)}
+        ${ex.medical ? ligne("Pôle médical", -ex.medical) : ""}
         ${ligne("Structure, stade et déplacements", -ex.structure)}
         ${ligne("<strong>Total des charges</strong>", -ex.charges, true)}
       </tbody></table>
@@ -4334,6 +4567,8 @@ function renderFinances(){
       </tbody></table></div>` : `<p class="petit muet">Aucune réception jouée pour l'instant.</p>`}
     </div>
   </div>
+  ${carteSponsor(ex)}
+  ${carteInfrastructures()}
   ${k.exercices.length ? `<div class="carte"><h2>Exercices clos</h2><div class="defilable"><table class="tbl"><thead><tr><th>Saison</th><th>Rang</th><th>Produits</th><th>Charges</th><th>Résultat</th><th>Trésorerie</th></tr></thead><tbody>
     ${k.exercices.slice().reverse().map(x=>`<tr><td>${x.saison}</td><td class="num">${x.rang}e</td><td class="num">${x.produits.toFixed(2)}</td><td class="num">${x.charges.toFixed(2)}</td>
       <td class="num" style="color:${x.resultat<0?'var(--alerte)':'var(--ok)'}">${x.resultat>=0?"+":"−"}${Math.abs(x.resultat).toFixed(2)}</td><td class="num moy">${x.tresorerie.toFixed(2)}</td></tr>`).join("")}
@@ -4728,6 +4963,9 @@ document.addEventListener("click", ev => {
     case "offre-accepter": state.messageMarche = traiterOffreRecue(+el.dataset.pid, true); sauvegarder(); render(); break;
     case "offre-refuser": state.messageMarche = traiterOffreRecue(+el.dataset.pid, false); sauvegarder(); render(); break;
     case "centre-ameliorer": state.messageMarche = ameliorerCentre(); sauvegarder(); render(); break;
+    case "signer-sponsor": state.messageFinances = signerSponsor(el.dataset.k); sauvegarder(); render(); break;
+    case "lancer-travaux": state.messageFinances = lancerTravaux(); sauvegarder(); render(); break;
+    case "niveau-medical": state.messageFinances = ameliorerMedical(); sauvegarder(); render(); break;
     case "centre-pro": state.messageMarche = passerPro(el.dataset.esp); sauvegarder(); render(); break;
     case "trier": if(state.tri.cle===el.dataset.cle) state.tri.desc = !state.tri.desc; else state.tri = {cle:el.dataset.cle, desc:true}; sauvegarder(); render(); break;
     case "auto-compo": state.feuille = completerSpecialistes(compositionAuto(state.clubId)); sauvegarder(); render(); break;
